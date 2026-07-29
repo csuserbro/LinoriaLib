@@ -393,9 +393,16 @@ type IconModule = {
 }
 
 local FetchIcons, Icons = pcall(function()
-    return (loadstring(
-        game:HttpGet("https://gitlab.com/upio/lucide-roblox-direct/-/raw/main/source.lua")
-    ) :: () -> IconModule)()
+    local function Load(URL: string)
+        local Success, Module = pcall(function()
+            return (loadstring(game:HttpGet(URL)) :: () -> IconModule)()
+        end)
+
+        return Success and Module or nil
+    end
+
+    return Load("https://upio-github-mirror.pages.dev/source.lua")
+        or Load("https://gitlab.com/upio/lucide-roblox-direct/-/raw/main/source.lua")
 end)
 
 function IsValidCustomIcon(Icon: string)
