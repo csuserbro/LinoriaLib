@@ -1612,6 +1612,7 @@ do
 
             local State = KeyPicker:GetState()
             local ShowToggle = Library.ShowToggleFrameInKeybinds and KeyPicker.Mode == "Toggle"
+			local Bound = KeyPicker.Mode == "Always" or (KeyPicker.Value ~= "None" and KeyPicker.Value ~= "Unknown")
 
             if KeyPicker.SyncToggleState and ParentObj.Value ~= State then
                 ParentObj:SetValue(State)
@@ -1620,7 +1621,7 @@ do
             if KeybindsToggle.Loaded then
                 KeybindsToggle:SetNormal(not ShowToggle)
 
-                KeybindsToggle:SetVisibility(true)
+                KeybindsToggle:SetVisibility(Bound)
                 KeybindsToggle:SetText(string.format("[%s] %s (%s)", tostring(KeyPicker.DisplayValue), Info.Text, KeyPicker.Mode))
                 KeybindsToggle:Display(State)
             end
