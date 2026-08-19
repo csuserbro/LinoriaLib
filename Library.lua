@@ -1180,7 +1180,7 @@ do
             Type = "KeyPicker";
             Callback = Info.Callback or function(Value) end;
             ChangedCallback = Info.ChangedCallback or function(New) end;
-            SyncToggleState = (Info.SyncToggleState or false;) and ParentObj.Type == "Toggle";
+            SyncToggleState = (Info.SyncToggleState or false) and ParentObj.Type == "Toggle";
 			SyncButton = (Info.SyncButton or false) and ParentObj.Type == "Button";
         }
 
