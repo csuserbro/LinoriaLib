@@ -761,6 +761,18 @@ Library.ToggleKeybind = Options.MenuKeybind -- Allows you to have a custom keybi
 -- Hand the library over to our managers
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
+-- The main window and keybind menu positions are saved automatically.
+-- Positions are relative to the screen size, so configs can be loaded on different resolutions.
+
+-- Custom Drawing / non-Library GUI positions can also be saved.
+-- Register them before LoadAutoloadConfig so their saved positions can be restored.
+
+--[[
+local MyDrawingPosition = Vector2.new(100, 100)
+local MyDrawingSize = Vector2.new(200, 100)
+
+SaveManager:RegisterPosition("MyDrawingWindow", function() return MyDrawingPosition end, function(Position) MyDrawingPosition = Position; UpdateMyDrawing() end, function() return MyDrawingSize end, 4)
+]]
 
 -- Ignore keys that are used by ThemeManager.
 -- (we dont want configs to save themes, do we?)
