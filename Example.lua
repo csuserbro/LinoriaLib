@@ -151,7 +151,8 @@ Toggles.MyToggle:SetValue(false)
 		Text = string,
 		Func = function,
 		DoubleClick = boolean
-		Tooltip = string,
+		Tooltip = string | table,
+		DisabledTooltip = string | table,
 	}
 
 	You can call :AddButton on a button to add a SubButton!
@@ -165,8 +166,9 @@ local MyButton = LeftGroupBox:AddButton({
 	end,
 	DoubleClick = false,
 
-	Tooltip = "This is the main button",
-	DisabledTooltip = "I am disabled!", -- Information shown when you hover over the button while it's disabled
+	-- You can provide your own translations. The current tooltip language will be selected automatically.
+	Tooltip = { EN = "This is the main button", RU = "Это основная кнопка" },
+	DisabledTooltip = { EN = "I am disabled!", RU = "Я отключена!" }, -- Information shown when you hover over the button while it's disabled
 
 	Disabled = false, -- Will disable the button (true / false)
 	Visible = true -- Will make the button invisible (true / false)
@@ -178,8 +180,8 @@ local MyButton2 = MyButton:AddButton({
 		print("You clicked a sub button!")
 		Library:Notify("This is a notification with sound", nil, 4590657391)
 	end,
+	Tooltip = { EN = "This is a sub button", RU = "Это двойная кнопка", AutoTranslate = false },
 	DoubleClick = true, -- You will have to click this button twice to trigger the callback
-	Tooltip = "This is the sub button (double click me!)"
 })
 
 local MyDisabledButton = LeftGroupBox:AddButton({
@@ -188,7 +190,7 @@ local MyDisabledButton = LeftGroupBox:AddButton({
 		print("You somehow clicked a disabled button!")
 	end,
 	DoubleClick = false,
-	Tooltip = "This is a disabled button",
+	Tooltip = { RU = "Это отключенная кнопка", AutoTranslate = false },
 	DisabledTooltip = "I am disabled!", -- Information shown when you hover over the button while it's disabled
 	Disabled = true
 })
@@ -200,7 +202,7 @@ local MyKeybindButton = LeftGroupBox:AddButton({
 		Library:Notify("Button triggered!")
 	end,
 	DoubleClick = false,
-	Tooltip = "This button can also be triggered with a keybind",
+	Tooltip = "Эту кнопку также можно активировать кейбиндом", -- Single-language tooltips can be translated automatically
 	DisabledTooltip = "I am disabled!",
 	Disabled = false,
 	Visible = true
@@ -748,6 +750,9 @@ local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu")
 
 MenuGroup:AddToggle("KeybindMenuOpen", { Default = Library.KeybindFrame.Visible, Text = "Open Keybind Menu", Callback = function(value) Library.KeybindFrame.Visible = value end})
 MenuGroup:AddToggle("ShowCustomCursor", {Text = "Custom Cursor", Default = true, Callback = function(Value) Library.ShowCustomCursor = Value end})
+-- Tooltip language defaults to RU for supported Roblox locales, otherwise EN.
+MenuGroup:AddDropdown("TooltipLanguage", { Values = { "EN", "RU" }, Default = Library.TooltipLanguage, Multi = false, Text = "Tooltip Language", Callback = function(Value) Library:SetTooltipLanguage(Value) end })
+MenuGroup:AddToggle("TooltipAutoTranslate", { Text = "Auto Translate Tooltips", Default = Library.TooltipAutoTranslate, Callback = function(Value) Library:SetTooltipAutoTranslate(Value) end })
 MenuGroup:AddDivider()
 MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu keybind" })
 MenuGroup:AddButton("Unload", function() Library:Unload() end)
