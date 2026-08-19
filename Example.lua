@@ -193,6 +193,36 @@ local MyDisabledButton = LeftGroupBox:AddButton({
 	Disabled = true
 })
 
+local MyKeybindButton = LeftGroupBox:AddButton({
+	Text = "Button with keybind",
+	Func = function()
+		print("[cb] Button with keybind clicked!")
+		Library:Notify("Button triggered!")
+	end,
+	DoubleClick = false,
+	Tooltip = "This button can also be triggered with a keybind",
+	DisabledTooltip = "I am disabled!",
+	Disabled = false,
+	Visible = true
+}):AddKeyPicker("MyButtonKeyPicker", {
+	-- SyncButton only works with buttons.
+	-- It allows you to make a keybind which triggers its parent button
+	Default = "F",
+	SyncButton = true,
+	Mode = "Press",
+	Text = "Button with keybind",
+	NoUI = false,
+	-- Occurs when the keybind is clicked
+	Callback = function()
+		print("[cb] Button keybind clicked!")
+	end,
+
+	-- Occurs when the keybind itself is changed, `NewKey` is a KeyCode Enum OR a UserInputType Enum, `NewModifiers` is a table with KeyCode Enum(s) or nil
+	ChangedCallback = function(NewKey, NewModifiers)
+		print("[cb] Button keybind changed!", NewKey, table.unpack(NewModifiers or {}))
+	end,
+})
+
 --[[
 	NOTE: You can chain the button methods!
 	EXAMPLE:
