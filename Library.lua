@@ -8,6 +8,8 @@ local Teams: Teams = cloneref(game:GetService("Teams"))
 local Players: Players = cloneref(game:GetService("Players"))
 local RunService: RunService = cloneref(game:GetService("RunService"))
 local TweenService: TweenService = cloneref(game:GetService("TweenService"))
+local HttpService: HttpService = cloneref(game:GetService("HttpService"))
+local LocalizationService: LocalizationService = cloneref(game:GetService("LocalizationService"))
 
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local Mouse = cloneref(LocalPlayer:GetMouse())
@@ -224,6 +226,27 @@ do
     end
 end
 
+local TooltipRussianLocales = {
+	ru = true;
+	uk = true;
+	be = true;
+	kk = true;
+	ky = true;
+	uz = true;
+	tg = true;
+	hy = true;
+	az = true;
+	ka = true;
+	tk = true;
+}
+
+local function GetDefaultTooltipLanguage()
+	local Locale = "en-us"
+	pcall(function() Locale = LocalizationService.RobloxLocaleId end)
+	local Language = tostring(Locale):lower():match("^([a-z]+)")
+	return TooltipRussianLocales[Language] and "RU" or "EN"
+end
+
 local DPIScale = 1;
 local Library = {
     Registry = {};
@@ -285,6 +308,10 @@ local Library = {
     NotifySide = "Left";
     ShowCustomCursor = true;
     ShowToggleFrameInKeybinds = true;
+    TooltipLanguage = GetDefaultTooltipLanguage();
+    TooltipAutoTranslate = true;
+    TooltipTranslationCache = {};
+    TooltipTranslator = nil;
     NotifyOnError = false; -- true = Library:Notify for SafeCallback (still warns in the developer console)
 
     -- addons --
@@ -764,139 +791,314 @@ function Library:MakeResizable(Instance, MinSize)
     end)
 end
 
+local function IsTooltipValue(Value)
+	local ValueType = typeof(Value)
+	return ValueType == "string" or ValueType == "table"
+end
+
+local function DetectTooltipLanguage(Text)
+	local Cyrillic = 0
+	local Latin = 0
+
+	pcall(function()
+		for _, Codepoint in utf8.codes(Text) do
+			if Codepoint >= 0x0400 and Codepoint <= 0x052F then
+				Cyrillic += 1
+			elseif (Codepoint >= 65 and Codepoint <= 90) or (Codepoint >= 97 and Codepoint <= 122) then
+				Latin += 1
+			end
+		end
+	end)
+
+	return Cyrillic > Latin and "RU" or "EN"
+end
+
+local function TranslateTooltip(Text, SourceLanguage, TargetLanguage)
+	if SourceLanguage == TargetLanguage then
+		return Text
+	end
+
+	local CacheKey = SourceLanguage .. "\0" .. TargetLanguage .. "\0" .. Text
+	local Cached = Library.TooltipTranslationCache[CacheKey]
+
+	if Cached then
+		return Cached
+	end
+
+	if typeof(Library.TooltipTranslator) == "function" then
+		local Success, Result = pcall(Library.TooltipTranslator, Text, SourceLanguage, TargetLanguage)
+
+		if Success and typeof(Result) == "string" and Result ~= "" then
+			Library.TooltipTranslationCache[CacheKey] = Result
+			return Result
+		end
+	end
+
+	local Success, Data = pcall(function()
+		local URL = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" .. SourceLanguage:lower() .. "&tl=" .. TargetLanguage:lower() .. "&dt=t&q=" .. HttpService:UrlEncode(Text)
+		return HttpService:JSONDecode(game:HttpGet(URL))
+	end)
+
+	if Success and typeof(Data) == "table" and typeof(Data[1]) == "table" then
+		local Parts = {}
+
+		for _, Part in ipairs(Data[1]) do
+			if typeof(Part) == "table" and typeof(Part[1]) == "string" then
+				table.insert(Parts, Part[1])
+			end
+		end
+
+		if #Parts > 0 then
+			local Result = table.concat(Parts)
+			Library.TooltipTranslationCache[CacheKey] = Result
+			return Result
+		end
+	end
+
+	return Text
+end
+
+function Library:GetTooltipText(Value)
+	if not IsTooltipValue(Value) then
+		return nil
+	end
+
+	local TargetLanguage = Library.TooltipLanguage
+	local Text
+	local SourceLanguage
+	local AutoTranslate = true
+
+	if typeof(Value) == "table" then
+		local DirectText = Value[TargetLanguage] or Value[TargetLanguage:lower()]
+
+		if typeof(DirectText) == "string" then
+			return DirectText
+		end
+
+		if TargetLanguage == "EN" then
+			Text = Value.RU or Value.ru
+			SourceLanguage = "RU"
+		else
+			Text = Value.EN or Value.en
+			SourceLanguage = "EN"
+		end
+
+		if typeof(Text) ~= "string" then
+			Text = Value.Text or Value.text or Value[1]
+
+			if typeof(Text) ~= "string" then
+				return nil
+			end
+
+			SourceLanguage = Value.Source or Value.source or DetectTooltipLanguage(Text)
+		end
+
+		AutoTranslate = Value.AutoTranslate ~= false
+	else
+		Text = Value
+		SourceLanguage = DetectTooltipLanguage(Text)
+	end
+
+	SourceLanguage = tostring(SourceLanguage or ""):upper()
+
+	if SourceLanguage ~= "RU" and SourceLanguage ~= "EN" then
+		SourceLanguage = DetectTooltipLanguage(Text)
+	end
+
+	if SourceLanguage == TargetLanguage or not Library.TooltipAutoTranslate or not AutoTranslate then
+		return Text
+	end
+
+	return TranslateTooltip(Text, SourceLanguage, TargetLanguage)
+end
+
+function Library:SetTooltipLanguage(Language)
+	Language = tostring(Language):upper()
+
+	if Language ~= "RU" and Language ~= "EN" then
+		return
+	end
+
+	Library.TooltipLanguage = Language
+
+	for _, TooltipTable in ipairs(Tooltips) do
+		if TooltipTable.Tooltip.Visible and TooltipTable.Refresh then
+			TooltipTable:Refresh()
+		end
+	end
+end
+
+function Library:SetTooltipAutoTranslate(Value)
+	Library.TooltipAutoTranslate = Value == true
+
+	for _, TooltipTable in ipairs(Tooltips) do
+		if TooltipTable.Tooltip.Visible and TooltipTable.Refresh then
+			TooltipTable:Refresh()
+		end
+	end
+end
+
+function Library:SetTooltipTranslator(Translator)
+	Library.TooltipTranslator = typeof(Translator) == "function" and Translator or nil
+	Library.TooltipTranslationCache = {}
+
+	for _, TooltipTable in ipairs(Tooltips) do
+		if TooltipTable.Tooltip.Visible and TooltipTable.Refresh then
+			TooltipTable:Refresh()
+		end
+	end
+end
+
 function Library:AddToolTip(InfoStr, DisabledInfoStr, HoverInstance)
-    InfoStr = typeof(InfoStr) == "string" and InfoStr or nil
-    DisabledInfoStr = typeof(DisabledInfoStr) == "string" and DisabledInfoStr or nil
+	local Tooltip = Library:Create("Frame", {
+		BackgroundColor3 = Library.MainColor;
+		BorderColor3 = Library.OutlineColor;
+		ZIndex = 100;
+		Parent = Library.ScreenGui;
+		Visible = false;
+	})
 
-    local Tooltip = Library:Create("Frame", {
-        BackgroundColor3 = Library.MainColor;
-        BorderColor3 = Library.OutlineColor;
+	local Label = Library:CreateLabel({
+		Position = UDim2.fromOffset(3, 1);
+		TextSize = 14;
+		Text = "";
+		TextColor3 = Library.FontColor;
+		TextXAlignment = Enum.TextXAlignment.Left;
+		ZIndex = Tooltip.ZIndex + 1;
+		Parent = Tooltip;
+	})
 
-        ZIndex = 100;
-        Parent = Library.ScreenGui;
+	Library:AddToRegistry(Tooltip, {
+		BackgroundColor3 = "MainColor";
+		BorderColor3 = "OutlineColor";
+	})
 
-        Visible = false;
-    })
+	Library:AddToRegistry(Label, {
+		TextColor3 = "FontColor";
+	})
 
-    local Label = Library:CreateLabel({
-        Position = UDim2.fromOffset(3, 1);
-        
-        TextSize = 14;
-        Text = InfoStr;
-        TextColor3 = Library.FontColor;
-        TextXAlignment = Enum.TextXAlignment.Left;
-        ZIndex = Tooltip.ZIndex + 1;
+	local TooltipTable = {
+		Tooltip = Tooltip;
+		Disabled = false;
+		Signals = {};
+	}
 
-        Parent = Tooltip;
-    })
+	local IsHovering = false
 
-    Library:AddToRegistry(Tooltip, {
-        BackgroundColor3 = "MainColor";
-        BorderColor3 = "OutlineColor";
-    })
+	local function UpdateText(Text)
+		if Text == nil then
+			return
+		end
 
-    Library:AddToRegistry(Label, {
-        TextColor3 = "FontColor",
-    })
+		local X, Y = Library:GetTextBounds(Text, Library.Font, 14 * DPIScale)
+		Label.Text = Text
+		Tooltip.Size = UDim2.fromOffset(X + 5, Y + 4)
+		Label.Size = UDim2.fromOffset(X, Y)
+	end
 
-    local TooltipTable = {
-        Tooltip = Tooltip;
-        Disabled = false;
+	local function UpdatePosition()
+		local Camera = workspace.CurrentCamera
+		local Viewport = Camera and Camera.ViewportSize or Vector2.new(1920, 1080)
+		local Size = Tooltip.AbsoluteSize
+		local X = math.clamp(Mouse.X + 15, 4, math.max(4, Viewport.X - Size.X - 4))
+		local Y = math.clamp(Mouse.Y + 12, 4, math.max(4, Viewport.Y - Size.Y - 4))
+		Tooltip.Position = UDim2.fromOffset(X, Y)
+	end
 
-        Signals = {};
-    }
-    local IsHovering = false
+	local function GiveSignal(Connection: RBXScriptConnection | RBXScriptSignal)
+		local ConnectionType = typeof(Connection)
 
-    local function UpdateText(Text)
-        if Text == nil then return end
+		if Connection and (ConnectionType == "RBXScriptConnection" or ConnectionType == "RBXScriptSignal") then
+			table.insert(TooltipTable.Signals, Connection)
+		end
 
-        local X, Y = Library:GetTextBounds(Text, Library.Font, 14 * DPIScale)
+		return Connection
+	end
 
-        Label.Text = Text
-        Tooltip.Size = UDim2.fromOffset(X + 5, Y + 4)
-        Label.Size = UDim2.fromOffset(X, Y)
-    end
+	function TooltipTable:Refresh()
+		local Value = TooltipTable.Disabled and DisabledInfoStr or InfoStr
+		local Text = Library:GetTooltipText(Value)
 
-    local function GiveSignal(Connection: RBXScriptConnection | RBXScriptSignal)
-        local ConnectionType = typeof(Connection)
-        if Connection and (ConnectionType == "RBXScriptConnection" or ConnectionType == "RBXScriptSignal") then
-            table.insert(TooltipTable.Signals, Connection)
-        end
+		if Text == nil or Text == "" then
+			Tooltip.Visible = false
+			return false
+		end
 
-        return Connection
-    end
+		UpdateText(Text)
 
-    UpdateText(InfoStr)
+		if Tooltip.Visible then
+			UpdatePosition()
+		end
 
-    GiveSignal(HoverInstance.MouseEnter:Connect(function()
-        if Library:MouseIsOverOpenedFrame() then
-            Tooltip.Visible = false
-            return
-        end
+		return true
+	end
 
-        if not TooltipTable.Disabled then
-            if InfoStr == nil or InfoStr == "" then
-                Tooltip.Visible = false
-                return
-            end
+	GiveSignal(HoverInstance.MouseEnter:Connect(function()
+		if Library:MouseIsOverOpenedFrame() then
+			Tooltip.Visible = false
+			return
+		end
 
-            if Label.Text ~= InfoStr then
-                UpdateText(InfoStr)
-            end
-        else
-            if DisabledInfoStr == nil or DisabledInfoStr == "" then
-                Tooltip.Visible = false
-                return
-            end
+		if not TooltipTable:Refresh() then
+			return
+		end
 
-            if Label.Text ~= DisabledInfoStr then 
-                UpdateText(DisabledInfoStr)
-            end
-        end
+		if not Library:MouseIsOverFrame(HoverInstance) then
+			return
+		end
 
-        IsHovering = true
+		IsHovering = true
+		local LastDisabled = TooltipTable.Disabled
 
-        Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
-        Tooltip.Visible = true
+		UpdatePosition()
+		Tooltip.Visible = true
 
-        while IsHovering do
-            if TooltipTable.Disabled == true and DisabledInfoStr == nil then break end
+		while IsHovering do
+			RunService.Heartbeat:Wait()
 
-            RunService.Heartbeat:Wait()
-            Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
-        end
+			if LastDisabled ~= TooltipTable.Disabled then
+				LastDisabled = TooltipTable.Disabled
 
-        IsHovering = false
-        Tooltip.Visible = false
-    end))
+				if not TooltipTable:Refresh() then
+					break
+				end
+			end
 
-    GiveSignal(HoverInstance.MouseLeave:Connect(function()
-        IsHovering = false
-        Tooltip.Visible = false
-    end))
-    
-    if LibraryMainOuterFrame then
-        GiveSignal(LibraryMainOuterFrame:GetPropertyChangedSignal("Visible"):Connect(function()
-            if LibraryMainOuterFrame.Visible == false then
-                IsHovering = false
-                Tooltip.Visible = false
-            end
-        end))
-    end
+			UpdatePosition()
+		end
 
-    function TooltipTable:Destroy()
-        for Idx = #TooltipTable.Signals, 1, -1 do
-            local Connection = table.remove(TooltipTable.Signals, Idx)
-            if Connection and Connection.Connected then
-                Connection:Disconnect()
-            end
-        end
+		IsHovering = false
+		Tooltip.Visible = false
+	end))
 
-        Tooltip:Destroy()
-    end
+	GiveSignal(HoverInstance.MouseLeave:Connect(function()
+		IsHovering = false
+		Tooltip.Visible = false
+	end))
 
-    table.insert(Tooltips, TooltipTable)
-    return TooltipTable
+	if LibraryMainOuterFrame then
+		GiveSignal(LibraryMainOuterFrame:GetPropertyChangedSignal("Visible"):Connect(function()
+			if LibraryMainOuterFrame.Visible == false then
+				IsHovering = false
+				Tooltip.Visible = false
+			end
+		end))
+	end
+
+	function TooltipTable:Destroy()
+		for Idx = #TooltipTable.Signals, 1, -1 do
+			local Connection = table.remove(TooltipTable.Signals, Idx)
+
+			if Connection and Connection.Connected then
+				Connection:Disconnect()
+			end
+		end
+
+		Tooltip:Destroy()
+	end
+
+	table.insert(Tooltips, TooltipTable)
+	return TooltipTable
 end
 
 function Library:MouseIsOverFrame(Frame, Input)
@@ -2749,7 +2951,7 @@ do
             end
         )
 
-        if typeof(Info.Tooltip) == "string" or typeof(Info.DisabledTooltip) == "string" then
+		if IsTooltipValue(Info.Tooltip) or IsTooltipValue(Info.DisabledTooltip) then
             Tooltip = Library:AddToolTip(Info.Tooltip, Info.DisabledTooltip, DropdownOuter)
             Tooltip.Disabled = Dropdown.Disabled
         end
@@ -3695,7 +3897,7 @@ do
             end
 
             function SubButton:AddToolTip(tooltip, disabledTooltip)
-                if typeof(tooltip) == "string" or typeof(disabledTooltip) == "string" then
+                if IsTooltipValue(tooltip) or IsTooltipValue(disabledTooltip) then
                     if SubButton.TooltipTable then
                         SubButton.TooltipTable:Destroy()
                     end
@@ -3724,7 +3926,7 @@ do
                 end
             end
 
-            if typeof(SubButton.Tooltip) == "string" or typeof(SubButton.DisabledTooltip) == "string" then
+            if IsTooltipValue(SubButton.Tooltip) or IsTooltipValue(SubButton.DisabledTooltip) then
                 SubButton.TooltipTable = SubButton:AddToolTip(SubButton.Tooltip, SubButton.DisabledTooltip, SubButton.Outer)
                 SubButton.TooltipTable.Disabled = SubButton.Disabled
             end
@@ -3741,7 +3943,7 @@ do
         end
 
         function Button:AddToolTip(tooltip, disabledTooltip)
-            if typeof(tooltip) == "string" or typeof(disabledTooltip) == "string" then
+            if IsTooltipValue(tooltip) or IsTooltipValue(disabledTooltip) then
                 if Button.TooltipTable then
                     Button.TooltipTable:Destroy()
                 end
@@ -3753,7 +3955,7 @@ do
             return Button
         end
 
-        if typeof(Button.Tooltip) == "string" or typeof(Button.DisabledTooltip) == "string" then
+        if IsTooltipValue(Button.Tooltip) or IsTooltipValue(Button.DisabledTooltip) then
             Button.TooltipTable = Button:AddToolTip(Button.Tooltip, Button.DisabledTooltip, Button.Outer)
             Button.TooltipTable.Disabled = Button.Disabled
         end
@@ -3865,7 +4067,7 @@ do
         )
 
         local TooltipTable
-        if typeof(Info.Tooltip) == "string" or typeof(Info.DisabledTooltip) == "string" then
+        if IsTooltipValue(Info.Tooltip) or IsTooltipValue(Info.DisabledTooltip) then
             TooltipTable = Library:AddToolTip(Info.Tooltip, Info.DisabledTooltip, TextBoxOuter)
             TooltipTable.Disabled = Textbox.Disabled
         end
@@ -4151,7 +4353,7 @@ do
             Toggle:Display()
         end
 
-        if typeof(Info.Tooltip) == "string" or typeof(Info.DisabledTooltip) == "string" then
+        if IsTooltipValue(Info.Tooltip) or IsTooltipValue(Info.DisabledTooltip) then
             Tooltip = Library:AddToolTip(Info.Tooltip, Info.DisabledTooltip, ToggleRegion)
             Tooltip.Disabled = Toggle.Disabled
         end
@@ -4405,7 +4607,7 @@ do
             end
         )
 
-        if typeof(Info.Tooltip) == "string" or typeof(Info.DisabledTooltip) == "string" then
+        if IsTooltipValue(Info.Tooltip) or IsTooltipValue(Info.DisabledTooltip) then
             Tooltip = Library:AddToolTip(Info.Tooltip, Info.DisabledTooltip, SliderOuter)
             Tooltip.Disabled = Slider.Disabled
         end
@@ -4813,7 +5015,7 @@ do
             end
         )
 
-        if typeof(Info.Tooltip) == "string" or typeof(Info.DisabledTooltip) == "string" then
+        if IsTooltipValue(Info.Tooltip) or IsTooltipValue(Info.DisabledTooltip) then
             Tooltip = Library:AddToolTip(Info.Tooltip, Info.DisabledTooltip, DropdownOuter)
             Tooltip.Disabled = Dropdown.Disabled
         end
