@@ -1180,11 +1180,12 @@ do
             Type = "KeyPicker";
             Callback = Info.Callback or function(Value) end;
             ChangedCallback = Info.ChangedCallback or function(New) end;
-            SyncToggleState = Info.SyncToggleState or false;
+            SyncToggleState = (Info.SyncToggleState or false;) and ParentObj.Type == "Toggle";
+			SyncButton = (Info.SyncButton or false) and ParentObj.Type == "Button";
         }
 
         if KeyPicker.Mode == "Press" then
-            assert(ParentObj.Type == "Label", "KeyPicker with the mode \"Press\" can be only applied on Labels.")
+            assert(ParentObj.Type == "Label" or ParentObj.Type == "Button", "KeyPicker with the mode \"Press\" can be only applied on Labels or Buttons.")
             
             KeyPicker.SyncToggleState = false
             Info.Modes = { "Press" }
@@ -1603,6 +1604,10 @@ do
             PickOuter.Size = UDim2.new(0, 999999, 0, 18)
             RunService.RenderStepped:Wait()
             PickOuter.Size = UDim2.new(0, math.max(28, DisplayLabel.TextBounds.X + 8), 0, 18)
+
+			if ParentObj.Type == "Button" and ParentObj.UpdateAddonLayout then
+    			ParentObj:UpdateAddonLayout()
+			end
         end
 
         function KeyPicker:Update()
@@ -1735,6 +1740,10 @@ do
                 KeyPicker.Toggled = true
             end
 
+			if KeyPicker.SyncButton and ParentObj.Type == "Button" then
+    			ParentObj:Press()
+			end
+												
             Library:SafeCallback(KeyPicker.Callback, KeyPicker.Toggled)
             Library:SafeCallback(KeyPicker.Clicked, KeyPicker.Toggled)
 
@@ -3489,6 +3498,8 @@ do
         }
         Button.OriginalText = Button.Text
         Button.Func = Button.Func or Button.Callback
+		Button.Type = "Button"
+		Button.Addons = {}
         assert(typeof(Button.Func) == "function", "AddButton: `Func` callback is missing.")
 
         local Blank = nil
@@ -3619,6 +3630,46 @@ do
 
         Button.Outer, Button.Inner, Button.Label = CreateBaseButton(Button)
         Button.Outer.Parent = Container
+		Button.AddonContainer = Library:Create("Frame", {
+		    BackgroundTransparency = 1;
+		    Size = UDim2.new(0, 0, 0, 18);
+		    Position = UDim2.new(1, 4, 0, 1);
+		    ZIndex = 8;
+		    Parent = Button.Outer;
+		})
+		
+		Button.AddonLayout = Library:Create("UIListLayout", {
+		    Padding = UDim.new(0, 4);
+		    FillDirection = Enum.FillDirection.Horizontal;
+		    HorizontalAlignment = Enum.HorizontalAlignment.Right;
+		    VerticalAlignment = Enum.VerticalAlignment.Center;
+		    SortOrder = Enum.SortOrder.LayoutOrder;
+		    Parent = Button.AddonContainer;
+		})
+		
+		function Button:UpdateAddonLayout()
+		    local Width = 0
+		    local Count = 0
+		
+		    for _, Child in next, Button.AddonContainer:GetChildren() do
+		        if Child:IsA("UIListLayout") then
+		            continue
+		        end
+		
+		        Width = Width + Child.Size.X.Offset
+		        Count = Count + 1
+		    end
+		
+		    if Count > 1 then
+		        Width = Width + ((Count - 1) * 4)
+		    end
+		
+		    Button.AddonContainer.Size = UDim2.new(0, Width, 0, 18)
+		    Button.Outer.Size = UDim2.new(1, -(Width > 0 and Width + 8 or 4), 0, 20 * DPIScale)
+		end
+		
+		Button.TextLabel = Button.AddonContainer
+		Button.Container = Container
 
         InitEvents(Button)
 
@@ -3722,6 +3773,14 @@ do
                 Button.Label.Text = Button.Text
             end
         end
+																						
+		function Button:Press()
+		    if Button.Disabled then
+		        return
+		    end
+		
+		    Library:SafeCallback(Button.Func)
+		end
 
         function Button:SetDisabled(Disabled)
             Button.Disabled = Disabled
@@ -3739,6 +3798,8 @@ do
 
         table.insert(Groupbox.Elements, Button)
         table.insert(Buttons, Button)
+
+		setmetatable(Button, BaseAddons)
 
         return Button
     end
