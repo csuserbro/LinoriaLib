@@ -49,6 +49,7 @@ local SaveManager = {} do
     SaveManager.SubFolder = ""
     SaveManager.Ignore = {}
     SaveManager.Library = nil
+    SaveManager.Positions = {}
     SaveManager.Parser = {
         Toggle = {
             Save = function(idx, object)
@@ -114,10 +115,193 @@ local SaveManager = {} do
                 end
             end,
         },
+        PlayerManager = {
+            Save = function(idx, object)
+                local function encode(value)
+                    if typeof(value) == 'Color3' then
+                        return { __linoriaType = 'Color3', value = value:ToHex() }
+                    elseif type(value) == 'table' then
+                        local out = {}
+                        for key, item in pairs(value) do
+                            out[key] = encode(item)
+                        end
+                        return out
+                    end
+                    return value
+                end
+                return {
+                    type = 'PlayerManager',
+                    idx = idx,
+                    states = encode(object:GetStates())
+                }
+            end,
+            Load = function(idx, data)
+                local function decode(value)
+                    if type(value) == 'table' then
+                        if value.__linoriaType == 'Color3' and type(value.value) == 'string' then
+                            local ok, color = pcall(Color3.fromHex, value.value)
+                            return ok and color or Color3.new(1, 1, 1)
+                        end
+                        local out = {}
+                        for key, item in pairs(value) do
+                            out[key] = decode(item)
+                        end
+                        return out
+                    end
+                    return value
+                end
+                local object = SaveManager.Library.Options[idx]
+                if object and object.SetStates then
+                    object:SetStates(decode(type(data.states) == 'table' and data.states or {}))
+                end
+            end,
+        },
     }
+
+    function SaveManager:GetViewportSize()
+        local camera = workspace.CurrentCamera
+        local size = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+        if size.X <= 0 or size.Y <= 0 then
+            return Vector2.new(1920, 1080)
+        end
+        return size
+    end
+
+    function SaveManager:RegisterPosition(idx, getPosition, setPosition, getSize, padding)
+        assert(typeof(idx) == 'string' and idx ~= '', 'RegisterPosition -> idx must be a non-empty string')
+        assert(typeof(getPosition) == 'function', 'RegisterPosition -> getPosition must be a function')
+        assert(typeof(setPosition) == 'function', 'RegisterPosition -> setPosition must be a function')
+        self.Positions[idx] = {
+            Get = getPosition,
+            Set = setPosition,
+            Size = typeof(getSize) == 'function' and getSize or nil,
+            Padding = tonumber(padding) or 0,
+        }
+        return self.Positions[idx]
+    end
+
+    function SaveManager:UnregisterPosition(idx)
+        self.Positions[idx] = nil
+    end
+
+    function SaveManager:GetPositionData(entry)
+        local okPosition, position = pcall(entry.Get)
+        if not okPosition or typeof(position) ~= 'Vector2' then
+            return nil
+        end
+
+        local size = Vector2.zero
+        if entry.Size then
+            local okSize, value = pcall(entry.Size)
+            if okSize and typeof(value) == 'Vector2' then
+                size = value
+            end
+        end
+
+        local viewport = self:GetViewportSize()
+        local padding = math.max(entry.Padding, 0)
+        local spanX = math.max(viewport.X - size.X - padding * 2, 1)
+        local spanY = math.max(viewport.Y - size.Y - padding * 2, 1)
+        local x = math.clamp((position.X - padding) / spanX, 0, 1)
+        local y = math.clamp((position.Y - padding) / spanY, 0, 1)
+
+        return { x = x, y = y }
+    end
+
+    function SaveManager:ApplyPositionData(entry, data)
+        if type(data) ~= 'table' or type(data.x) ~= 'number' or type(data.y) ~= 'number' then
+            return
+        end
+
+        local size = Vector2.zero
+        if entry.Size then
+            local okSize, value = pcall(entry.Size)
+            if okSize and typeof(value) == 'Vector2' then
+                size = value
+            end
+        end
+
+        local viewport = self:GetViewportSize()
+        local padding = math.max(entry.Padding, 0)
+        local spanX = math.max(viewport.X - size.X - padding * 2, 1)
+        local spanY = math.max(viewport.Y - size.Y - padding * 2, 1)
+        local position = Vector2.new(
+            padding + math.clamp(data.x, 0, 1) * spanX,
+            padding + math.clamp(data.y, 0, 1) * spanY
+        )
+
+        pcall(entry.Set, position)
+    end
 
     function SaveManager:SetLibrary(library)
         self.Library = library
+        library.SaveManager = self
+
+        self:RegisterPosition('LibraryWindow', function()
+            local holder = library.Window and library.Window.Holder
+            return holder and holder.AbsolutePosition or nil
+        end, function(position)
+            local holder = library.Window and library.Window.Holder
+            if holder then
+                local target = Vector2.new(
+                    position.X + holder.AbsoluteSize.X * holder.AnchorPoint.X,
+                    position.Y + holder.AbsoluteSize.Y * holder.AnchorPoint.Y
+                )
+                if library.ConstrainDraggableWindow then
+                    target = library:ConstrainDraggableWindow(holder, target)
+                end
+                holder.Position = UDim2.fromOffset(target.X, target.Y)
+            end
+        end, function()
+            local holder = library.Window and library.Window.Holder
+            return holder and holder.AbsoluteSize or Vector2.zero
+        end, 4)
+
+        self:RegisterPosition('KeybindMenu', function()
+            local holder = library.KeybindFrame
+            return holder and holder.AbsolutePosition or nil
+        end, function(position)
+            local holder = library.KeybindFrame
+            if holder then
+                local target = Vector2.new(
+                    position.X + holder.AbsoluteSize.X * holder.AnchorPoint.X,
+                    position.Y + holder.AbsoluteSize.Y * holder.AnchorPoint.Y
+                )
+                if library.ConstrainDraggableWindow then
+                    target = library:ConstrainDraggableWindow(holder, target)
+                end
+                holder.Position = UDim2.fromOffset(target.X, target.Y)
+            end
+        end, function()
+            local holder = library.KeybindFrame
+            return holder and holder.AbsoluteSize or Vector2.zero
+        end, 4)
+
+        self:RegisterPosition('Watermark', function()
+            local holder = library.Watermark
+            return holder and holder.AbsolutePosition or nil
+        end, function(position)
+            local holder = library.Watermark
+            if holder then
+                local target = Vector2.new(
+                    position.X + holder.AbsoluteSize.X * holder.AnchorPoint.X,
+                    position.Y + holder.AbsoluteSize.Y * holder.AnchorPoint.Y
+                )
+                if library.ConstrainDraggableWindow then
+                    target = library:ConstrainDraggableWindow(holder, target)
+                end
+                holder.Position = UDim2.fromOffset(target.X, target.Y)
+            end
+        end, function()
+            local holder = library.Watermark
+            return holder and holder.AbsoluteSize or Vector2.zero
+        end, 4)
+
+        for idx, provider in pairs(library.FloatingPositionProviders or {}) do
+            if type(provider) == 'table' and typeof(provider.Get) == 'function' and typeof(provider.Set) == 'function' then
+                self:RegisterPosition(idx .. 'Window', provider.Get, provider.Set, provider.Size, provider.Padding)
+            end
+        end
     end
 
     function SaveManager:IgnoreThemeSettings()
@@ -213,10 +397,12 @@ local SaveManager = {} do
         end
 
         local data = {
-            objects = {}
+            objects = {},
+            positions = {}
         }
 
         for idx, toggle in next, self.Library.Toggles do
+            if toggle.Transient then continue end
             if not toggle.Type then continue end
             if not self.Parser[toggle.Type] then continue end
             if self.Ignore[idx] then continue end
@@ -225,11 +411,20 @@ local SaveManager = {} do
         end
 
         for idx, option in next, self.Library.Options do
+            if option.Transient then continue end
             if not option.Type then continue end
             if not self.Parser[option.Type] then continue end
             if self.Ignore[idx] then continue end
 
             table.insert(data.objects, self.Parser[option.Type].Save(idx, option))
+        end
+
+        for idx, entry in next, self.Positions do
+            if self.Ignore[idx] then continue end
+            local positionData = self:GetPositionData(entry)
+            if positionData then
+                data.positions[idx] = positionData
+            end
         end
 
         local success, encoded = pcall(HttpService.JSONEncode, HttpService, data)
@@ -257,12 +452,19 @@ local SaveManager = {} do
         local success, decoded = pcall(HttpService.JSONDecode, HttpService, readfile(file))
         if not success then return false, 'decode error' end
 
-        for _, option in next, decoded.objects do
+        for _, option in next, decoded.objects or {} do
             if not option.type then continue end
             if not self.Parser[option.type] then continue end
             if self.Ignore[option.idx] then continue end
 
             task.spawn(self.Parser[option.type].Load, option.idx, option) -- task.spawn() so the config loading wont get stuck.
+        end
+
+        for idx, positionData in next, decoded.positions or {} do
+            local entry = self.Positions[idx]
+            if entry and not self.Ignore[idx] then
+                self:ApplyPositionData(entry, positionData)
+            end
         end
 
         return true
