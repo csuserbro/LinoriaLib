@@ -14,12 +14,7 @@ local LocalizationService: LocalizationService = cloneref(game:GetService("Local
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local Mouse = cloneref(LocalPlayer:GetMouse())
 
-local DrawingLib = { drawing_replaced = true, new = function(...) error("Drawing is not supported.") end }
-local IsBadDrawingLib = false
-
-if typeof(getgenv) == "function" and typeof(getgenv().Drawing) == "table" then
-    DrawingLib = getgenv().Drawing
-end
+local DrawingLib = Drawing
 
 local setclipboard = setclipboard or nil
 local getgenv = getgenv or function()
@@ -325,6 +320,10 @@ local Library = {
     Buttons = Buttons;
     Dialogues = Dialogues;
     ActiveDialog = nil;
+    FloatingWindows = {};
+    FloatingPositionProviders = {};
+    DraggableWindows = {};
+    DragSnapDistance = 8;
 
     ImageManager = CustomImageManager;
 }
@@ -587,8 +586,131 @@ function Library:CreateLabel(Properties, IsHud)
     return Library:Create(_Instance, Properties)
 end
 
-function Library:MakeDraggable(Instance, Cutoff, IsMainWindow)
+function Library:RegisterDraggableWindow(Instance, CollisionGroup)
+    if typeof(Instance) ~= "Instance" then
+        return
+    end
+    if Instance.Parent == ScreenGui then
+        if CollisionGroup == nil then
+            Library.DraggableWindows[Instance] = false
+        else
+            Library.DraggableWindows[Instance] = CollisionGroup
+        end
+    end
+end
+
+function Library:ConstrainDraggableWindow(Instance, Position)
+    if typeof(Instance) ~= "Instance" or typeof(Position) ~= "Vector2" then
+        return Position
+    end
+
+    local Viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+    local Size = Instance.AbsoluteSize
+    if Size.X <= 1 or Size.Y <= 1 then
+        Size = Vector2.new(Instance.Size.X.Offset, Instance.Size.Y.Offset)
+    end
+
+    local Anchor = Instance.AnchorPoint
+    local TopLeft = Position - Vector2.new(Size.X * Anchor.X, Size.Y * Anchor.Y)
+    local MaxX = math.max(Viewport.X - Size.X, 0)
+    local MaxY = math.max(Viewport.Y - Size.Y, 0)
+    TopLeft = Vector2.new(math.clamp(TopLeft.X, 0, MaxX), math.clamp(TopLeft.Y, 0, MaxY))
+
+    local Snap = math.max(tonumber(Library.DragSnapDistance) or 8, 0)
+    local CollisionGroup = Library.DraggableWindows[Instance]
+
+    for Other, OtherGroup in pairs(Library.DraggableWindows) do
+        if not Other.Parent then
+            Library.DraggableWindows[Other] = nil
+        elseif CollisionGroup and OtherGroup == CollisionGroup and Other ~= Instance and Other.Visible and Other.Parent == Instance.Parent then
+            local OtherPos = Other.AbsolutePosition
+            local OtherSize = Other.AbsoluteSize
+            if OtherSize.X <= 1 or OtherSize.Y <= 1 then
+                OtherSize = Vector2.new(Other.Size.X.Offset, Other.Size.Y.Offset)
+            end
+
+            local Left = TopLeft.X
+            local Right = Left + Size.X
+            local Top = TopLeft.Y
+            local Bottom = Top + Size.Y
+            local OLeft = OtherPos.X
+            local ORight = OLeft + OtherSize.X
+            local OTop = OtherPos.Y
+            local OBottom = OTop + OtherSize.Y
+
+            local VerticalOverlap = Bottom > OTop and Top < OBottom
+            local HorizontalOverlap = Right > OLeft and Left < ORight
+
+            if VerticalOverlap then
+                if math.abs(Right - OLeft) <= Snap then
+                    TopLeft = Vector2.new(OLeft - Size.X, TopLeft.Y)
+                elseif math.abs(Left - ORight) <= Snap then
+                    TopLeft = Vector2.new(ORight, TopLeft.Y)
+                end
+            end
+
+            Left = TopLeft.X
+            Right = Left + Size.X
+            Top = TopLeft.Y
+            Bottom = Top + Size.Y
+            HorizontalOverlap = Right > OLeft and Left < ORight
+
+            if HorizontalOverlap then
+                if math.abs(Bottom - OTop) <= Snap then
+                    TopLeft = Vector2.new(TopLeft.X, OTop - Size.Y)
+                elseif math.abs(Top - OBottom) <= Snap then
+                    TopLeft = Vector2.new(TopLeft.X, OBottom)
+                end
+            end
+
+            Left = TopLeft.X
+            Right = Left + Size.X
+            Top = TopLeft.Y
+            Bottom = Top + Size.Y
+            VerticalOverlap = Bottom > OTop and Top < OBottom
+            HorizontalOverlap = Right > OLeft and Left < ORight
+
+            if VerticalOverlap and HorizontalOverlap then
+                local PushLeft = math.abs(Right - OLeft)
+                local PushRight = math.abs(ORight - Left)
+                local PushTop = math.abs(Bottom - OTop)
+                local PushBottom = math.abs(OBottom - Top)
+                local MinPush = math.min(PushLeft, PushRight, PushTop, PushBottom)
+
+                if MinPush == PushLeft then
+                    TopLeft = Vector2.new(OLeft - Size.X, TopLeft.Y)
+                elseif MinPush == PushRight then
+                    TopLeft = Vector2.new(ORight, TopLeft.Y)
+                elseif MinPush == PushTop then
+                    TopLeft = Vector2.new(TopLeft.X, OTop - Size.Y)
+                else
+                    TopLeft = Vector2.new(TopLeft.X, OBottom)
+                end
+            end
+
+            TopLeft = Vector2.new(math.clamp(TopLeft.X, 0, MaxX), math.clamp(TopLeft.Y, 0, MaxY))
+        end
+    end
+
+    return TopLeft + Vector2.new(Size.X * Anchor.X, Size.Y * Anchor.Y)
+end
+
+function Library:MakeDraggable(Instance, Cutoff, IsMainWindow, CollisionGroup)
     Instance.Active = true
+    if Instance.Parent == ScreenGui then
+        local Group = CollisionGroup
+        if Group == nil then
+            Group = IsMainWindow == true and "Panels" or false
+        end
+        Library:RegisterDraggableWindow(Instance, Group)
+    end
+
+    local function SetPosition(Position)
+        if Library.DraggableWindows[Instance] ~= nil then
+            Position = Library:ConstrainDraggableWindow(Instance, Position)
+        end
+        Instance.Position = UDim2.fromOffset(Position.X, Position.Y)
+    end
 
     if Library.IsMobile == false then
         Instance.InputBegan:Connect(function(Input)
@@ -596,7 +718,7 @@ function Library:MakeDraggable(Instance, Cutoff, IsMainWindow)
                 if IsMainWindow == true and Library.CantDragForced == true then
                     return
                 end
-           
+
                 local ObjPos = Vector2.new(
                     Mouse.X - Instance.AbsolutePosition.X,
                     Mouse.Y - Instance.AbsolutePosition.Y
@@ -607,13 +729,11 @@ function Library:MakeDraggable(Instance, Cutoff, IsMainWindow)
                 end
 
                 while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
-                    Instance.Position = UDim2.new(
-                        0,
+                    local Position = Vector2.new(
                         Mouse.X - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
-                        0,
                         Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
                     )
-
+                    SetPosition(Position)
                     RunService.RenderStepped:Wait()
                 end
             end
@@ -630,17 +750,16 @@ function Library:MakeDraggable(Instance, Cutoff, IsMainWindow)
             if not Dragging and Library:MouseIsOverFrame(Instance, Input) and (IsMainWindow == true and (Library.CanDrag == true and Library.Window.Holder.Visible == true) or true) then
                 DraggingInput = Input
                 DraggingStart = Input.Position
-                StartPosition = Instance.Position
-
-                local OffsetPos = Input.Position - DraggingStart
-                if OffsetPos.Y > (Cutoff or 40) then
+                StartPosition = Instance.AbsolutePosition + Vector2.new(Instance.AbsoluteSize.X * Instance.AnchorPoint.X, Instance.AbsoluteSize.Y * Instance.AnchorPoint.Y)
+                local LocalPoint = Input.Position - Instance.AbsolutePosition
+                if LocalPoint.Y > (Cutoff or 40) then
                     Dragging = false
                     return
                 end
-
                 Dragging = true
             end
         end)
+
         InputService.TouchMoved:Connect(function(Input)
             if IsMainWindow == true and Library.CantDragForced == true then
                 Dragging = false
@@ -648,18 +767,12 @@ function Library:MakeDraggable(Instance, Cutoff, IsMainWindow)
             end
 
             if Input == DraggingInput and Dragging and (IsMainWindow == true and (Library.CanDrag == true and Library.Window.Holder.Visible == true) or true) then
-                local OffsetPos = Input.Position - DraggingStart
-
-                Instance.Position = UDim2.new(
-                    StartPosition.X.Scale,
-                    StartPosition.X.Offset + OffsetPos.X,
-                    StartPosition.Y.Scale,
-                    StartPosition.Y.Offset + OffsetPos.Y
-                )
+                SetPosition(StartPosition + (Input.Position - DraggingStart))
             end
         end)
+
         InputService.TouchEnded:Connect(function(Input)
-            if Input == DraggingInput then 
+            if Input == DraggingInput then
                 Dragging = false
             end
         end)
@@ -1365,6 +1478,11 @@ local BaseAddons = {}
 do
     local BaseAddonsFuncs = {}
 
+    local function NextAddonLayoutOrder(ParentObj)
+        ParentObj.AddonLayoutOrder = (ParentObj.AddonLayoutOrder or 0) + 1
+        return ParentObj.AddonLayoutOrder
+    end
+
         function BaseAddonsFuncs:AddKeyPicker(Idx, Info)
         local ParentObj = self
         local ToggleLabel = self.TextLabel
@@ -1525,6 +1643,7 @@ do
             BackgroundColor3 = Color3.new(0, 0, 0);
             BorderColor3 = Color3.new(0, 0, 0);
             Size = UDim2.new(0, 28, 0, 15);
+            LayoutOrder = NextAddonLayoutOrder(ParentObj);
             ZIndex = 6;
             Parent = ToggleLabel;
         })
@@ -2158,6 +2277,7 @@ do
 
             Transparency = Info.Transparency or 0;
             Type = "ColorPicker";
+            Transient = Info.Transient == true;
             Title = typeof(Info.Title) == "string" and Info.Title or "Color picker",
             Callback = Info.Callback or function(Color) end;
             Changed = nil,
@@ -2198,6 +2318,7 @@ do
             BorderColor3 = Library:GetDarkerColor(ColorPicker.Value);
             BorderMode = Enum.BorderMode.Inset;
             Size = UDim2.new(0, 28, 0, 15);
+            LayoutOrder = NextAddonLayoutOrder(ParentObj);
             ZIndex = 6;
             Parent = ToggleLabel;
         })
@@ -2276,7 +2397,7 @@ do
         })
 
         local CursorOuter = Library:Create("ImageLabel", {
-            AnchorPoint = Vector2.new(0.5, 0.5);
+            AnchorPoint = Vector2.new(0.43, 0.5);
             Size = UDim2.new(0, 6, 0, 6);
             BackgroundTransparency = 1;
             Image = CustomImageManager.GetAsset("Cursor");
@@ -2827,6 +2948,7 @@ do
 
             Multi = Info.Multi;
             Type = "Dropdown";
+            Transient = Info.Transient == true;
             SpecialType = Info.SpecialType; -- can be either "Player" or "Team"
             Visible = if typeof(Info.Visible) == "boolean" then Info.Visible else true;
             Disabled = if typeof(Info.Disabled) == "boolean" then Info.Disabled else false;
@@ -2855,7 +2977,8 @@ do
         local DropdownOuter = Library:Create("Frame", {
             BackgroundColor3 = Color3.new(0, 0, 0);
             BorderColor3 = Color3.new(0, 0, 0);
-            Size = UDim2.new(0, 60, 0, 18);
+            Size = UDim2.new(0, math.max(40, tonumber(Info.Width) or 60), 0, 18);
+            LayoutOrder = NextAddonLayoutOrder(ParentObj);
             Visible = Dropdown.Visible;
             ZIndex = 6;
             Parent = ToggleLabel;
@@ -4020,6 +4143,7 @@ do
             AllowEmpty = if typeof(Info.AllowEmpty) == "boolean" then Info.AllowEmpty else true;
             EmptyReset = if typeof(Info.EmptyReset) == "string" then Info.EmptyReset else "---";
             Type = "Input";
+            Transient = Info.Transient == true;
 
             Callback = Info.Callback or function(Value) end;
         }
@@ -4259,6 +4383,7 @@ do
         local Toggle = {
             Value = Info.Default or false;
             Type = "Toggle";
+            Transient = Info.Transient == true;
             Visible = if typeof(Info.Visible) == "boolean" then Info.Visible else true;
             Disabled = if typeof(Info.Disabled) == "boolean" then Info.Disabled else false;
             Risky = if typeof(Info.Risky) == "boolean" then Info.Risky else false;
@@ -4501,6 +4626,7 @@ do
             Rounding = Info.Rounding;
             MaxSize = 232;
             Type = "Slider";
+            Transient = Info.Transient == true;
             Visible = if typeof(Info.Visible) == "boolean" then Info.Visible else true;
             Disabled = if typeof(Info.Disabled) == "boolean" then Info.Disabled else false;
             OriginalText = Info.Text; Text = Info.Text;
@@ -4874,6 +5000,7 @@ do
 
             Multi = Info.Multi;
             Type = "Dropdown";
+            Transient = Info.Transient == true;
             SpecialType = Info.SpecialType; -- can be either "Player" or "Team"
             Visible = if typeof(Info.Visible) == "boolean" then Info.Visible else true;
             Disabled = if typeof(Info.Disabled) == "boolean" then Info.Disabled else false;
@@ -7934,6 +8061,1016 @@ end
             return Tab:AddGroupbox({ Side = 2; Name = Name; })
         end
 
+        function Tab:AddPlayerManager(Idx, Info)
+            Info = Info or {}
+            assert(typeof(Idx) == "string" and Idx ~= "", "AddPlayerManager -> Idx must be a non-empty string")
+
+            local function CloneValue(Value)
+                if type(Value) ~= "table" then
+                    return Value
+                end
+
+                local Result = {}
+                for Key, Item in pairs(Value) do
+                    Result[CloneValue(Key)] = CloneValue(Item)
+                end
+                return Result
+            end
+
+            local function ValuesEqual(A, B)
+                if type(A) ~= type(B) then
+                    return false
+                end
+                if type(A) ~= "table" then
+                    return A == B
+                end
+
+                for Key, Value in pairs(A) do
+                    if not ValuesEqual(Value, B[Key]) then
+                        return false
+                    end
+                end
+                for Key in pairs(B) do
+                    if A[Key] == nil then
+                        return false
+                    end
+                end
+                return true
+            end
+
+            local Fields = {}
+            local FieldMap = {}
+            local DefaultValues = {}
+
+            for FieldIndex, RawField in ipairs(Info.Fields or {}) do
+                if type(RawField) == "table" then
+                    local FieldType = tostring(RawField.Type or "Toggle")
+                    local Key = tostring(RawField.Key or RawField.Index or RawField.Text or ("Field" .. FieldIndex))
+                    local Field = {}
+
+                    for Property, Value in pairs(RawField) do
+                        Field[Property] = Value
+                    end
+
+                    Field.Type = FieldType
+                    Field.Key = Key
+                    Field.Text = tostring(Field.Text or Key)
+
+                    if Field.Type == "Toggle" then
+                        Field.Default = Field.Default == true
+                    elseif Field.Type == "ToggleColor" then
+                        Field.Default = Field.Default == true
+                        Field.ColorKey = tostring(Field.ColorKey or (Key .. "Color"))
+                        Field.ColorDefault = typeof(Field.ColorDefault) == "Color3" and Field.ColorDefault or Color3.fromRGB(255, 255, 255)
+                        Field.Transparency = tonumber(Field.Transparency) or 0
+                    elseif Field.Type == "Dropdown" then
+                        Field.Values = Field.Values or {}
+                        if Field.Default == nil then
+                            Field.Default = Field.Multi and {} or Field.Values[1]
+                        end
+                    elseif Field.Type == "Slider" then
+                        Field.Min = tonumber(Field.Min) or 0
+                        Field.Max = tonumber(Field.Max) or 100
+                        Field.Rounding = tonumber(Field.Rounding) or 0
+                        Field.Default = tonumber(Field.Default)
+                        if Field.Default == nil then
+                            Field.Default = Field.Min
+                        end
+                    elseif Field.Type == "Input" then
+                        Field.Default = tostring(Field.Default or "")
+                    else
+                        Field.Type = "Toggle"
+                        Field.Default = Field.Default == true
+                    end
+
+                    Fields[#Fields + 1] = Field
+                    FieldMap[Key] = Field
+                    DefaultValues[Key] = CloneValue(Field.Default)
+                    if Field.Type == "ToggleColor" then
+                        FieldMap[Field.ColorKey] = Field
+                        DefaultValues[Field.ColorKey] = Field.ColorDefault
+                    end
+                end
+            end
+
+            if #Fields == 0 then
+                local Defaults = {
+                    { Type = "Dropdown", Key = "Relation", Text = "Relation", Values = { "Neutral", "Friendly", "Enemy" }, Default = "Neutral" },
+                    { Type = "ToggleColor", Key = "UseRelationColor", ColorKey = "RelationColor", Text = "Override Color", Default = false, ColorDefault = Color3.fromRGB(255, 120, 120) },
+                    { Type = "Input", Key = "Note", Text = "Note", Default = "", Placeholder = "Player note", Finished = true },
+                }
+
+                for _, Field in ipairs(Defaults) do
+                    Fields[#Fields + 1] = Field
+                    FieldMap[Field.Key] = Field
+                    DefaultValues[Field.Key] = CloneValue(Field.Default)
+                    if Field.Type == "ToggleColor" then
+                        FieldMap[Field.ColorKey] = Field
+                        DefaultValues[Field.ColorKey] = Field.ColorDefault
+                    end
+                end
+            end
+
+            local Manager = {
+                Type = "PlayerManager",
+                States = {},
+                Rows = {},
+                Fields = Fields,
+                FieldMap = FieldMap,
+                Defaults = DefaultValues,
+                Controls = {},
+                SelectedUserId = nil,
+                SelectedPlayer = nil,
+                Syncing = false,
+                ExcludeLocalPlayer = if typeof(Info.ExcludeLocalPlayer) == "boolean" then Info.ExcludeLocalPlayer else true,
+                Standalone = Info.Standalone == true,
+                Callback = Info.Callback or Info.OnStateChanged or function() end,
+                SelectedCallback = Info.SelectedCallback or Info.OnSelected or function() end,
+            }
+
+            local ListSide = Info.ListSide or Info.Side or 1
+            local SettingsSide = Info.SettingsSide or 2
+            if typeof(ListSide) == "string" then ListSide = ListSide:lower() == "right" and 2 or 1 end
+            if typeof(SettingsSide) == "string" then SettingsSide = SettingsSide:lower() == "left" and 1 or 2 end
+            if ListSide ~= 1 and ListSide ~= 2 then ListSide = 1 end
+            if SettingsSide ~= 1 and SettingsSide ~= 2 then SettingsSide = 2 end
+
+            local ListGroup
+            local SettingsGroup
+            local FloatingOuter
+
+            local function CreateDetachedGroupbox(Parent, Name)
+                local Groupbox = { Elements = {}, TableType = "Groupbox" }
+                local BoxOuter = Library:Create("Frame", {
+                    BackgroundColor3 = Library.BackgroundColor,
+                    BorderColor3 = Library.OutlineColor,
+                    BorderMode = Enum.BorderMode.Inset,
+                    Size = UDim2.fromScale(1, 1),
+                    ZIndex = 2,
+                    Parent = Parent,
+                })
+                Library:AddToRegistry(BoxOuter, { BackgroundColor3 = "BackgroundColor", BorderColor3 = "OutlineColor" })
+
+                local BoxInner = Library:Create("Frame", {
+                    BackgroundColor3 = Library.BackgroundColor,
+                    BorderColor3 = Color3.new(0, 0, 0),
+                    Position = UDim2.fromOffset(1, 1),
+                    Size = UDim2.new(1, -2, 1, -2),
+                    ZIndex = 3,
+                    Parent = BoxOuter,
+                })
+                Library:AddToRegistry(BoxInner, { BackgroundColor3 = "BackgroundColor" })
+
+                local Highlight = Library:Create("Frame", {
+                    BackgroundColor3 = Library.AccentColor,
+                    BorderSizePixel = 0,
+                    Size = UDim2.new(1, 0, 0, 2),
+                    ZIndex = 5,
+                    Parent = BoxInner,
+                })
+                Library:AddToRegistry(Highlight, { BackgroundColor3 = "AccentColor" })
+
+                Library:CreateLabel({
+                    Position = UDim2.fromOffset(4, 2),
+                    Size = UDim2.new(1, -8, 0, 18),
+                    TextSize = 14,
+                    Text = Name,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 5,
+                    Parent = BoxInner,
+                })
+
+                local Container = Library:Create("Frame", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(4, 20),
+                    Size = UDim2.new(1, -8, 1, -24),
+                    ZIndex = 3,
+                    Parent = BoxInner,
+                })
+                Library:Create("UIListLayout", {
+                    FillDirection = Enum.FillDirection.Vertical,
+                    SortOrder = Enum.SortOrder.LayoutOrder,
+                    Parent = Container,
+                })
+
+                function Groupbox:Resize() end
+                Groupbox.Container = Container
+                Groupbox.BoxOuter = BoxOuter
+                setmetatable(Groupbox, BaseGroupbox)
+                Groupbox:AddBlank(3)
+                return Groupbox
+            end
+
+            if Manager.Standalone then
+                local Width = math.max(430, tonumber(Info.Width) or 520)
+                local Height = math.max(300, tonumber(Info.Height) or 360)
+                local StartPosition = typeof(Info.Position) == "Vector2" and Info.Position or Vector2.new(60, 90)
+                local MainHolder = Library.Window and Library.Window.Holder
+                if typeof(Info.Position) ~= "Vector2" and MainHolder and MainHolder.Parent then
+                    local Viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+                    local MainSize = MainHolder.AbsoluteSize
+                    if MainSize.X <= 1 then
+                        MainSize = Vector2.new(MainHolder.Size.X.Offset, MainHolder.Size.Y.Offset)
+                    end
+                    local Gap = math.max(tonumber(Info.DockGap) or 8, 4)
+                    local AvailableWidth = Viewport.X - MainSize.X - Gap - 12
+                    if AvailableWidth >= 430 then
+                        Width = math.min(Width, AvailableWidth)
+                    end
+                    local TotalWidth = MainSize.X + Gap + Width
+                    local MainX = math.max(4, math.floor((Viewport.X - TotalWidth) * 0.5))
+                    local MainY = math.max(4, math.floor((Viewport.Y - math.max(MainSize.Y, Height)) * 0.5))
+                    MainHolder.Position = UDim2.fromOffset(MainX, MainY)
+                    StartPosition = Vector2.new(MainX + MainSize.X + Gap, MainY)
+                end
+
+                FloatingOuter = Library:Create("Frame", {
+                    BackgroundColor3 = Library.BackgroundColor,
+                    BorderColor3 = Library.OutlineColor,
+                    BorderMode = Enum.BorderMode.Inset,
+                    Position = UDim2.fromOffset(StartPosition.X, StartPosition.Y),
+                    Size = UDim2.fromOffset(Width, Height),
+                    Visible = Library.Toggled,
+                    ZIndex = 1,
+                    Parent = ScreenGui,
+                })
+                Library:AddToRegistry(FloatingOuter, { BackgroundColor3 = "BackgroundColor", BorderColor3 = "OutlineColor" })
+
+                local TopAccent = Library:Create("Frame", {
+                    BackgroundColor3 = Library.AccentColor,
+                    BorderSizePixel = 0,
+                    Size = UDim2.new(1, 0, 0, 2),
+                    ZIndex = 5,
+                    Parent = FloatingOuter,
+                })
+                Library:AddToRegistry(TopAccent, { BackgroundColor3 = "AccentColor" })
+
+                Library:CreateLabel({
+                    Position = UDim2.fromOffset(8, 4),
+                    Size = UDim2.new(1, -16, 0, 18),
+                    TextSize = 14,
+                    Text = Info.Title or "Players",
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 5,
+                    Parent = FloatingOuter,
+                })
+
+                local Body = Library:Create("Frame", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(8, 26),
+                    Size = UDim2.new(1, -16, 1, -34),
+                    ZIndex = 2,
+                    Parent = FloatingOuter,
+                })
+                local LeftHost = Library:Create("Frame", { BackgroundTransparency = 1, Position = UDim2.fromScale(0, 0), Size = UDim2.new(0.48, -4, 1, 0), ZIndex = 2, Parent = Body })
+                local RightHost = Library:Create("Frame", { BackgroundTransparency = 1, Position = UDim2.new(0.48, 4, 0, 0), Size = UDim2.new(0.52, -4, 1, 0), ZIndex = 2, Parent = Body })
+
+                ListGroup = CreateDetachedGroupbox(LeftHost, Info.ListTitle or "Players")
+                SettingsGroup = CreateDetachedGroupbox(RightHost, Info.SettingsTitle or "Selected Player")
+                Library:MakeDraggable(FloatingOuter, 24, false, "Panels")
+
+                Manager.Outer = FloatingOuter
+                Manager.Visible = Info.Visible ~= false
+                Library.FloatingWindows[Idx] = { Instance = FloatingOuter, Visible = Manager.Visible }
+                FloatingOuter.Visible = Library.Toggled and Manager.Visible
+                Library.FloatingPositionProviders[Idx] = {
+                    Get = function() return FloatingOuter.AbsolutePosition end,
+                    Set = function(Position)
+                        local AnchorPosition = Position + Vector2.new(FloatingOuter.AbsoluteSize.X * FloatingOuter.AnchorPoint.X, FloatingOuter.AbsoluteSize.Y * FloatingOuter.AnchorPoint.Y)
+                        if Library.ConstrainDraggableWindow then
+                            AnchorPosition = Library:ConstrainDraggableWindow(FloatingOuter, AnchorPosition)
+                        end
+                        FloatingOuter.Position = UDim2.fromOffset(AnchorPosition.X, AnchorPosition.Y)
+                    end,
+                    Size = function() return FloatingOuter.AbsoluteSize end,
+                    Padding = 4,
+                }
+                if Library.SaveManager and Library.SaveManager.RegisterPosition then
+                    Library.SaveManager:RegisterPosition(Idx .. "Window", Library.FloatingPositionProviders[Idx].Get, Library.FloatingPositionProviders[Idx].Set, Library.FloatingPositionProviders[Idx].Size, 4)
+                end
+            else
+                ListGroup = Tab:AddGroupbox({ Side = ListSide, Name = Info.ListTitle or Info.Title or "Players" })
+                SettingsGroup = Tab:AddGroupbox({ Side = SettingsSide, Name = Info.SettingsTitle or "Selected Player" })
+            end
+
+            Manager.ListGroup = ListGroup
+            Manager.SettingsGroup = SettingsGroup
+
+            local Search = ListGroup:AddInput(Idx .. "__Search", {
+                Text = Info.SearchText or "Search",
+                Default = "",
+                Placeholder = Info.SearchPlaceholder or "Name / display / user id",
+                Finished = false,
+                ClearTextOnFocus = false,
+                Transient = true,
+            })
+            Manager.Search = Search
+
+            local ListHeight = math.max(90, tonumber(Info.ListHeight) or (Manager.Standalone and 230 or 190))
+            local ListHolder = Library:Create("Frame", {
+                BackgroundColor3 = Library.MainColor,
+                BorderColor3 = Library.OutlineColor,
+                BorderMode = Enum.BorderMode.Inset,
+                Size = UDim2.new(1, -4, 0, ListHeight),
+                ZIndex = 6,
+                Parent = ListGroup.Container,
+            })
+            Library:AddToRegistry(ListHolder, {
+                BackgroundColor3 = "MainColor";
+                BorderColor3 = "OutlineColor";
+            })
+
+            local ListScroll = Library:Create("ScrollingFrame", {
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0,
+                Position = UDim2.fromOffset(3, 3),
+                Size = UDim2.new(1, -6, 1, -6),
+                CanvasSize = UDim2.new(0, 0, 0, 0),
+                ScrollBarThickness = 3,
+                ScrollBarImageColor3 = Library.AccentColor,
+                ZIndex = 7,
+                Parent = ListHolder,
+            })
+            Library:AddToRegistry(ListScroll, { ScrollBarImageColor3 = "AccentColor" })
+
+            local ListLayout = Library:Create("UIListLayout", {
+                Padding = UDim.new(0, 1),
+                FillDirection = Enum.FillDirection.Vertical,
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                Parent = ListScroll,
+            })
+
+            ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                ListScroll.CanvasSize = UDim2.fromOffset(0, ListLayout.AbsoluteContentSize.Y)
+            end)
+
+            ListGroup:AddBlank(5)
+            ListGroup:Resize()
+
+            local Card = Library:Create("Frame", {
+                BackgroundColor3 = Library.MainColor,
+                BorderColor3 = Library.OutlineColor,
+                BorderMode = Enum.BorderMode.Inset,
+                Size = UDim2.new(1, -4, 0, 78),
+                ZIndex = 6,
+                Parent = SettingsGroup.Container,
+            })
+            Library:AddToRegistry(Card, {
+                BackgroundColor3 = "MainColor";
+                BorderColor3 = "OutlineColor";
+            })
+
+            local Avatar = Library:Create("ImageLabel", {
+                BackgroundColor3 = Library.BackgroundColor,
+                BorderColor3 = Library.OutlineColor,
+                BorderMode = Enum.BorderMode.Inset,
+                Position = UDim2.fromOffset(6, 6),
+                Size = UDim2.fromOffset(64, 64),
+                Image = "",
+                ZIndex = 7,
+                Parent = Card,
+            })
+            Library:AddToRegistry(Avatar, {
+                BackgroundColor3 = "BackgroundColor";
+                BorderColor3 = "OutlineColor";
+            })
+
+            local DisplayLabel = Library:CreateLabel({
+                Position = UDim2.fromOffset(78, 7),
+                Size = UDim2.new(1, -84, 0, 18),
+                TextSize = 14,
+                Text = "Select a player",
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 7,
+                Parent = Card,
+            })
+
+            local UsernameLabel = Library:CreateLabel({
+                Position = UDim2.fromOffset(78, 25),
+                Size = UDim2.new(1, -84, 0, 16),
+                TextSize = 13,
+                Text = "",
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 7,
+                Parent = Card,
+            })
+
+            local UserIdLabel = Library:CreateLabel({
+                Position = UDim2.fromOffset(78, 42),
+                Size = UDim2.new(1, -84, 0, 14),
+                TextSize = 12,
+                Text = "",
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 7,
+                Parent = Card,
+            })
+
+            local StatusLabel = Library:CreateLabel({
+                Position = UDim2.fromOffset(78, 57),
+                Size = UDim2.new(1, -84, 0, 14),
+                TextSize = 12,
+                Text = "",
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 7,
+                Parent = Card,
+            })
+
+            SettingsGroup:AddBlank(5)
+
+            function Manager:NormalizeUserId(PlayerOrUserId)
+                if typeof(PlayerOrUserId) == "Instance" and PlayerOrUserId:IsA("Player") then
+                    return tostring(PlayerOrUserId.UserId)
+                end
+                local Number = tonumber(PlayerOrUserId)
+                return Number and tostring(math.floor(Number)) or tostring(PlayerOrUserId or "")
+            end
+
+            function Manager:IsStateDefault(State)
+                if type(State) ~= "table" or type(State.Values) ~= "table" then
+                    return true
+                end
+                for Key, Default in pairs(self.Defaults) do
+                    if not ValuesEqual(State.Values[Key], Default) then
+                        return false
+                    end
+                end
+                return true
+            end
+
+            function Manager:GetOrCreateState(PlayerOrUserId, Metadata)
+                local UserId = self:NormalizeUserId(PlayerOrUserId)
+                if UserId == "" then
+                    return nil
+                end
+
+                local State = self.States[UserId]
+                if not State then
+                    State = {
+                        UserId = tonumber(UserId) or UserId,
+                        Name = nil,
+                        DisplayName = nil,
+                        Player = nil,
+                        Values = {},
+                    }
+                    for Key, Default in pairs(self.Defaults) do
+                        State.Values[Key] = CloneValue(Default)
+                    end
+                    self.States[UserId] = State
+                end
+
+                if typeof(PlayerOrUserId) == "Instance" and PlayerOrUserId:IsA("Player") then
+                    State.Player = PlayerOrUserId
+                    State.UserId = PlayerOrUserId.UserId
+                    State.Name = PlayerOrUserId.Name
+                    State.DisplayName = PlayerOrUserId.DisplayName
+                elseif type(Metadata) == "table" then
+                    State.Name = Metadata.Name or Metadata.name or State.Name
+                    State.DisplayName = Metadata.DisplayName or Metadata.displayName or Metadata.display or State.DisplayName
+                end
+
+                return State
+            end
+
+            function Manager:GetState(PlayerOrUserId)
+                local UserId = self:NormalizeUserId(PlayerOrUserId)
+                local State = self.States[UserId]
+                return State and State.Values or nil
+            end
+
+            function Manager:GetEntry(PlayerOrUserId)
+                return self.States[self:NormalizeUserId(PlayerOrUserId)]
+            end
+
+            function Manager:GetValue(PlayerOrUserId, Key, Fallback)
+                local State = self.States[self:NormalizeUserId(PlayerOrUserId)]
+                if not State or not State.Values then
+                    local Default = self.Defaults[Key]
+                    return Default ~= nil and CloneValue(Default) or Fallback
+                end
+                local Value = State.Values[Key]
+                if Value == nil then
+                    local Default = self.Defaults[Key]
+                    return Default ~= nil and CloneValue(Default) or Fallback
+                end
+                return Value
+            end
+
+            local function GetRelationColor(Relation)
+                Relation = tostring(Relation or "Neutral")
+                if Relation == "Enemy" then
+                    return Color3.fromRGB(255, 105, 105)
+                elseif Relation == "Friendly" then
+                    return Color3.fromRGB(105, 235, 145)
+                end
+                return Library.DisabledTextColor
+            end
+
+            local function GetStateSummary(State)
+                if not State then
+                    return ""
+                end
+                local Relation = tostring(State.Values.Relation or "Neutral")
+                local Note = tostring(State.Values.Note or "")
+                return Note ~= "" and (Relation .. " · " .. Note) or Relation
+            end
+
+            function Manager:UpdateSelectedCard()
+                local State = self.SelectedUserId and self.States[self.SelectedUserId] or nil
+                if not State then
+                    Avatar.Image = ""
+                    DisplayLabel.Text = "Select a player"
+                    UsernameLabel.Text = ""
+                    UserIdLabel.Text = ""
+                    StatusLabel.Text = ""
+                    return
+                end
+
+                local Display = State.DisplayName or State.Name or ("User " .. tostring(State.UserId))
+                local Username = State.Name and ("@" .. State.Name) or ""
+                DisplayLabel.Text = Display
+                UsernameLabel.Text = Username
+                UserIdLabel.Text = "UserId: " .. tostring(State.UserId)
+                StatusLabel.Text = GetStateSummary(State)
+                StatusLabel.TextColor3 = GetRelationColor(State.Values.Relation)
+
+                local UserId = tonumber(State.UserId)
+                Avatar.Image = ""
+                if UserId then
+                    local Expected = self.SelectedUserId
+                    task.spawn(function()
+                        local Success, Image = pcall(Players.GetUserThumbnailAsync, Players, UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+                        if Success and Manager.SelectedUserId == Expected then
+                            Avatar.Image = Image
+                        end
+                    end)
+                end
+            end
+
+            function Manager:RefreshControls()
+                local State = self.SelectedUserId and self.States[self.SelectedUserId] or nil
+                self.Syncing = true
+
+                for _, Field in ipairs(self.Fields) do
+                    local Control = Field.Control
+                    if Control then
+                        if State then
+                            Control:SetDisabled(false)
+                            Control:SetValue(CloneValue(State.Values[Field.Key]))
+                            if Field.Type == "ToggleColor" and Field.ColorControl then
+                                Field.ColorControl:SetValueRGB(State.Values[Field.ColorKey] or Field.ColorDefault)
+                            end
+                        else
+                            Control:SetValue(CloneValue(Field.Default))
+                            Control:SetDisabled(true)
+                            if Field.Type == "ToggleColor" and Field.ColorControl then
+                                Field.ColorControl:SetValueRGB(Field.ColorDefault)
+                            end
+                        end
+                    end
+                end
+
+                self.Syncing = false
+                self:UpdateSelectedCard()
+            end
+
+            function Manager:UpdateRowSelection()
+                for UserId, Row in pairs(self.Rows) do
+                    local Selected = UserId == self.SelectedUserId
+                    Row.Accent.Visible = Selected
+                    Row.Button.BackgroundTransparency = Selected and 0 or 1
+                end
+            end
+
+            function Manager:SetSelected(PlayerOrUserId)
+                local UserId = self:NormalizeUserId(PlayerOrUserId)
+                local State = self.States[UserId]
+                if not State or not State.Player then
+                    return false
+                end
+
+                self.SelectedUserId = UserId
+                self.SelectedPlayer = State.Player
+                self:RefreshControls()
+                self:UpdateRowSelection()
+                Library:SafeCallback(self.SelectedCallback, State.Player, tonumber(UserId) or UserId, State.Values)
+                return true
+            end
+
+            function Manager:SetValue(PlayerOrUserId, Key, Value, Silent)
+                local Field = self.FieldMap[Key]
+                if not Field then
+                    return false
+                end
+
+                local State = self:GetOrCreateState(PlayerOrUserId)
+                if not State then
+                    return false
+                end
+
+                State.Values[Key] = CloneValue(Value)
+
+                if self.SelectedUserId == self:NormalizeUserId(PlayerOrUserId) then
+                    self:UpdateSelectedCard()
+                end
+
+                if not Silent then
+                    Library:SafeCallback(self.Callback, State.Player, State.UserId, State.Values, Key, State.Values[Key])
+                    Library:AttemptSave()
+                end
+
+                self:RefreshRows()
+                return true
+            end
+
+            function Manager:GetStates()
+                local Saved = {}
+                for UserId, State in pairs(self.States) do
+                    if not self:IsStateDefault(State) then
+                        Saved[UserId] = {
+                            userId = tonumber(State.UserId) or State.UserId,
+                            name = State.Name,
+                            displayName = State.DisplayName,
+                            values = CloneValue(State.Values),
+                        }
+                    end
+                end
+                return Saved
+            end
+
+            function Manager:SetStates(SavedStates)
+                local CurrentPlayers = Players:GetPlayers()
+                self.States = {}
+
+                if type(SavedStates) == "table" then
+                    for RawUserId, Saved in pairs(SavedStates) do
+                        if type(Saved) == "table" then
+                            local UserId = tostring(Saved.userId or Saved.UserId or RawUserId)
+                            local State = self:GetOrCreateState(UserId, Saved)
+                            local Values = Saved.values or Saved.Values
+                            if State and type(Values) == "table" then
+                                for Key in pairs(self.Defaults) do
+                                    if Values[Key] ~= nil then
+                                        State.Values[Key] = CloneValue(Values[Key])
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                for _, Player in ipairs(CurrentPlayers) do
+                    if not (self.ExcludeLocalPlayer and Player == LocalPlayer) then
+                        self:GetOrCreateState(Player)
+                    end
+                end
+
+                self:RefreshRows()
+
+                if self.SelectedUserId and self.States[self.SelectedUserId] and self.States[self.SelectedUserId].Player then
+                    self:SetSelected(self.SelectedUserId)
+                else
+                    self.SelectedUserId = nil
+                    self.SelectedPlayer = nil
+                    self:RefreshControls()
+                end
+
+                for UserId, State in pairs(self.States) do
+                    if not self:IsStateDefault(State) then
+                        Library:SafeCallback(self.Callback, State.Player, State.UserId, State.Values, "__load", nil)
+                    end
+                end
+            end
+
+            function Manager:RefreshRows()
+                for _, Row in pairs(self.Rows) do
+                    if Row.Button and Row.Button.Parent then
+                        Row.Button:Destroy()
+                    end
+                end
+                self.Rows = {}
+
+                local Query = tostring(Search.Value or ""):lower()
+                local Entries = {}
+
+                for UserId, State in pairs(self.States) do
+                    local Include = State.Player ~= nil
+                    if Include then
+                        local SearchText = table.concat({
+                            tostring(State.Name or ""),
+                            tostring(State.DisplayName or ""),
+                            tostring(State.UserId or UserId),
+                        }, " "):lower()
+
+                        if Query == "" or SearchText:find(Query, 1, true) then
+                            Entries[#Entries + 1] = { UserId = UserId, State = State }
+                        end
+                    end
+                end
+
+                table.sort(Entries, function(A, B)
+                    local AOnline = A.State.Player ~= nil
+                    local BOnline = B.State.Player ~= nil
+                    if AOnline ~= BOnline then
+                        return AOnline
+                    end
+                    local AName = tostring(A.State.DisplayName or A.State.Name or A.UserId):lower()
+                    local BName = tostring(B.State.DisplayName or B.State.Name or B.UserId):lower()
+                    return AName < BName
+                end)
+
+                local FirstUserId
+                for LayoutOrder, Entry in ipairs(Entries) do
+                    local UserId = Entry.UserId
+                    local State = Entry.State
+                    FirstUserId = FirstUserId or UserId
+
+                    local Note = tostring(State.Values.Note or "")
+                    local RowHeight = Note ~= "" and 48 or 34
+
+                    local Button = Library:Create("TextButton", {
+                        AutoButtonColor = false,
+                        BackgroundColor3 = Library.MainColor,
+                        BackgroundTransparency = 1,
+                        BorderSizePixel = 0,
+                        Size = UDim2.new(1, -2, 0, RowHeight),
+                        Text = "",
+                        LayoutOrder = LayoutOrder,
+                        ZIndex = 8,
+                        Parent = ListScroll,
+                    })
+                    Library:AddToRegistry(Button, { BackgroundColor3 = "MainColor" })
+
+                    local Accent = Library:Create("Frame", {
+                        BackgroundColor3 = Library.AccentColor,
+                        BorderSizePixel = 0,
+                        Position = UDim2.fromOffset(0, 2),
+                        Size = UDim2.new(0, 2, 1, -4),
+                        Visible = UserId == self.SelectedUserId,
+                        ZIndex = 9,
+                        Parent = Button,
+                    })
+                    Library:AddToRegistry(Accent, { BackgroundColor3 = "AccentColor" })
+
+                    local NameText = State.DisplayName or State.Name or ("User " .. tostring(State.UserId))
+                    local BaseSub = State.Name and ("@" .. State.Name) or tostring(State.UserId)
+
+                    Library:CreateLabel({
+                        Position = UDim2.fromOffset(7, 2),
+                        Size = UDim2.new(1, -86, 0, 14),
+                        TextSize = 13,
+                        Text = NameText,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        TextTruncate = Enum.TextTruncate.AtEnd,
+                        ZIndex = 9,
+                        Parent = Button,
+                    })
+
+                    local SubLabel = Library:CreateLabel({
+                        Position = UDim2.fromOffset(7, 17),
+                        Size = UDim2.new(1, -86, 0, 12),
+                        TextSize = 11,
+                        Text = BaseSub,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        TextTruncate = Enum.TextTruncate.AtEnd,
+                        ZIndex = 9,
+                        Parent = Button,
+                    })
+                    SubLabel.TextColor3 = Library.DisabledTextColor
+
+                    if Note ~= "" then
+                        local NoteLabel = Library:CreateLabel({
+                            Position = UDim2.fromOffset(7, 31),
+                            Size = UDim2.new(1, -14, 0, 12),
+                            TextSize = 11,
+                            Text = "Note: " .. Note,
+                            TextXAlignment = Enum.TextXAlignment.Left,
+                            TextTruncate = Enum.TextTruncate.AtEnd,
+                            ZIndex = 9,
+                            Parent = Button,
+                        })
+                        NoteLabel.TextColor3 = Library.DisabledTextColor
+                    end
+
+                    local Relation = tostring(State.Values.Relation or "Neutral")
+                    local StateLabel = Library:CreateLabel({
+                        AnchorPoint = Vector2.new(1, 0),
+                        Position = UDim2.new(1, -5, 0, 4),
+                        Size = UDim2.fromOffset(72, 14),
+                        TextSize = 11,
+                        Text = Relation,
+                        TextXAlignment = Enum.TextXAlignment.Right,
+                        ZIndex = 9,
+                        Parent = Button,
+                    })
+                    StateLabel.TextColor3 = GetRelationColor(Relation)
+
+                    Button.MouseButton1Click:Connect(function()
+                        Manager:SetSelected(UserId)
+                    end)
+
+                    self.Rows[UserId] = {
+                        Button = Button,
+                        Accent = Accent,
+                    }
+                    Button.BackgroundTransparency = UserId == self.SelectedUserId and 0 or 1
+                end
+
+                self:UpdateRowSelection()
+
+                if not self.SelectedUserId and FirstUserId and Info.AutoSelect == true then
+                    self:SetSelected(FirstUserId)
+                end
+            end
+
+            for _, Field in ipairs(Fields) do
+                local ControlIdx = Idx .. "__" .. Field.Key
+                local Control
+
+                if Field.Type == "Toggle" then
+                    Control = SettingsGroup:AddToggle(ControlIdx, {
+                        Text = Field.Text,
+                        Default = Field.Default,
+                        Tooltip = Field.Tooltip,
+                        Transient = true,
+                        Callback = function(Value)
+                            if not Manager.Syncing and Manager.SelectedUserId then
+                                Manager:SetValue(Manager.SelectedUserId, Field.Key, Value)
+                            end
+                        end,
+                    })
+                elseif Field.Type == "ToggleColor" then
+                    Control = SettingsGroup:AddToggle(ControlIdx, {
+                        Text = Field.Text,
+                        Default = Field.Default,
+                        Tooltip = Field.Tooltip,
+                        Transient = true,
+                        Callback = function(Value)
+                            if not Manager.Syncing and Manager.SelectedUserId then
+                                Manager:SetValue(Manager.SelectedUserId, Field.Key, Value)
+                            end
+                        end,
+                    })
+                    local ColorIdx = ControlIdx .. "__Color"
+                    Control:AddColorPicker(ColorIdx, {
+                        Default = Field.ColorDefault,
+                        Transparency = Field.Transparency,
+                        Transient = true,
+                        Callback = function(Value)
+                            if not Manager.Syncing and Manager.SelectedUserId then
+                                Manager:SetValue(Manager.SelectedUserId, Field.ColorKey, Value)
+                            end
+                        end,
+                    })
+                    local ColorControl = Options[ColorIdx]
+                    Field.ColorControl = ColorControl
+                    Manager.Controls[Field.ColorKey] = ColorControl
+                elseif Field.Type == "Dropdown" then
+                    Control = SettingsGroup:AddDropdown(ControlIdx, {
+                        Text = Field.Text,
+                        Values = Field.Values,
+                        Default = Field.Default,
+                        Multi = Field.Multi == true,
+                        AllowNull = Field.AllowNull == true,
+                        Searchable = Field.Searchable == true,
+                        Transient = true,
+                        Callback = function(Value)
+                            if not Manager.Syncing and Manager.SelectedUserId then
+                                Manager:SetValue(Manager.SelectedUserId, Field.Key, Value)
+                            end
+                        end,
+                    })
+                elseif Field.Type == "Slider" then
+                    Control = SettingsGroup:AddSlider(ControlIdx, {
+                        Text = Field.Text,
+                        Default = Field.Default,
+                        Min = Field.Min,
+                        Max = Field.Max,
+                        Rounding = Field.Rounding,
+                        Suffix = Field.Suffix,
+                        Prefix = Field.Prefix,
+                        Compact = Field.Compact == true,
+                        Transient = true,
+                        Callback = function(Value)
+                            if not Manager.Syncing and Manager.SelectedUserId then
+                                Manager:SetValue(Manager.SelectedUserId, Field.Key, Value)
+                            end
+                        end,
+                    })
+                elseif Field.Type == "Input" then
+                    Control = SettingsGroup:AddInput(ControlIdx, {
+                        Text = Field.Text,
+                        Default = Field.Default,
+                        Placeholder = Field.Placeholder,
+                        Finished = Field.Finished == true,
+                        ClearTextOnFocus = Field.ClearTextOnFocus == true,
+                        Numeric = Field.Numeric == true,
+                        Transient = true,
+                        Callback = function(Value)
+                            if not Manager.Syncing and Manager.SelectedUserId then
+                                Manager:SetValue(Manager.SelectedUserId, Field.Key, Value)
+                            end
+                        end,
+                    })
+                end
+
+                if Control then
+                    Field.Control = Control
+                    Manager.Controls[Field.Key] = Control
+                    Control:SetDisabled(true)
+
+                end
+            end
+
+            Search:OnChanged(function(Value)
+                Manager:RefreshRows()
+            end)
+
+            for _, Player in ipairs(Players:GetPlayers()) do
+                if not (Manager.ExcludeLocalPlayer and Player == LocalPlayer) then
+                    Manager:GetOrCreateState(Player)
+                end
+            end
+
+            Library:GiveSignal(Players.PlayerAdded:Connect(function(Player)
+                if Manager.ExcludeLocalPlayer and Player == LocalPlayer then
+                    return
+                end
+                local State = Manager:GetOrCreateState(Player)
+                Manager:RefreshRows()
+                Library:SafeCallback(Manager.Callback, Player, Player.UserId, State.Values, "__join", nil)
+            end))
+
+            Library:GiveSignal(Players.PlayerRemoving:Connect(function(Player)
+                local UserId = tostring(Player.UserId)
+                local State = Manager.States[UserId]
+                if not State then
+                    return
+                end
+
+                State.Player = nil
+                if Manager.SelectedUserId == UserId then
+                    Manager.SelectedUserId = nil
+                    Manager.SelectedPlayer = nil
+                    Library:SafeCallback(Manager.SelectedCallback, nil, Player.UserId, nil)
+                end
+                if Manager:IsStateDefault(State) then
+                    Manager.States[UserId] = nil
+                end
+
+                Manager:RefreshRows()
+                Manager:RefreshControls()
+            end))
+
+            function Manager:SetVisible(Visible)
+                Manager.Visible = not not Visible
+                if Manager.Outer then
+                    Manager.Outer.Visible = Library.Toggled and Manager.Visible
+                    if Library.FloatingWindows[Idx] then
+                        Library.FloatingWindows[Idx].Visible = Manager.Visible
+                    end
+                end
+            end
+
+            function Manager:GetPosition()
+                return Manager.Outer and Manager.Outer.AbsolutePosition or nil
+            end
+
+            function Manager:SetPosition(Position)
+                if Manager.Outer and typeof(Position) == "Vector2" then
+                    Manager.Outer.Position = UDim2.fromOffset(Position.X, Position.Y)
+                end
+            end
+
+            function Manager:GetSize()
+                return Manager.Outer and Manager.Outer.AbsoluteSize or Vector2.zero
+            end
+
+            Manager:RefreshRows()
+            Manager:RefreshControls()
+            SettingsGroup:Resize()
+            task.defer(function()
+                if not Library.Unloaded then
+                    Manager:RefreshRows()
+                    Manager:RefreshControls()
+                end
+            end)
+
+            Options[Idx] = Manager
+            return Manager
+        end
+
+        function Tab:AddPlayers(Idx, Info)
+            return Tab:AddPlayerManager(Idx, Info)
+        end
+
+        function Tab:AddPlayerList(Idx, Info)
+            return Tab:AddPlayerManager(Idx, Info)
+        end
+
         function Tab:AddTabbox(Info)
             local Tabbox = {
                 Tabs = {};
@@ -8172,6 +9309,11 @@ end
         Toggled = (not Toggled)
 
         Library.Toggled = Toggled
+        for _, Floating in pairs(Library.FloatingWindows) do
+            if type(Floating) == "table" and typeof(Floating.Instance) == "Instance" then
+                Floating.Instance.Visible = Toggled and Floating.Visible ~= false
+            end
+        end
         if WindowInfo.UnlockMouseWhileOpen then
             ModalElement.Modal = Library.Toggled
         end
@@ -8180,44 +9322,40 @@ end
             -- A bit scuffed, but if we're going from not toggled -> toggled we want to show the frame immediately so that the fade is visible.
             Outer.Visible = true
 
-            if DrawingLib.drawing_replaced ~= true and IsBadDrawingLib ~= true then
-                IsBadDrawingLib = not (pcall(function()
-                    local Cursor = DrawingLib.new("Triangle")
-                    Cursor.Thickness = 1
-                    Cursor.Filled = true
-                    Cursor.Visible = Library.ShowCustomCursor
+            local Cursor = DrawingLib.new("Triangle")
+            Cursor.Thickness = 1
+            Cursor.Filled = true
+            Cursor.Visible = Library.ShowCustomCursor
 
-                    local CursorOutline = DrawingLib.new("Triangle")
-                    CursorOutline.Thickness = 1
-                    CursorOutline.Filled = false
-                    CursorOutline.Color = Color3.new(0, 0, 0)
-                    CursorOutline.Visible = Library.ShowCustomCursor
-                    
-                    local OldMouseIconState = InputService.MouseIconEnabled
-                    pcall(function() RunService:UnbindFromRenderStep("LinoriaCursor") end)
-                    RunService:BindToRenderStep("LinoriaCursor", Enum.RenderPriority.Camera.Value - 1, function()
-                        InputService.MouseIconEnabled = not Library.ShowCustomCursor
-                        local mPos = InputService:GetMouseLocation()
-                        local X, Y = mPos.X, mPos.Y
-                        Cursor.Color = Library.AccentColor
-                        Cursor.PointA = Vector2.new(X, Y)
-                        Cursor.PointB = Vector2.new(X + 16, Y + 6)
-                        Cursor.PointC = Vector2.new(X + 6, Y + 16)
-                        Cursor.Visible = Library.ShowCustomCursor
-                        CursorOutline.PointA = Cursor.PointA
-                        CursorOutline.PointB = Cursor.PointB
-                        CursorOutline.PointC = Cursor.PointC
-                        CursorOutline.Visible = Library.ShowCustomCursor
+            local CursorOutline = DrawingLib.new("Triangle")
+            CursorOutline.Thickness = 1
+            CursorOutline.Filled = false
+            CursorOutline.Color = Color3.new(0, 0, 0)
+            CursorOutline.Visible = Library.ShowCustomCursor
+            
+            local OldMouseIconState = InputService.MouseIconEnabled
+            pcall(function() RunService:UnbindFromRenderStep("LinoriaCursor") end)
+            RunService:BindToRenderStep("LinoriaCursor", Enum.RenderPriority.Camera.Value - 1, function()
+                InputService.MouseIconEnabled = not Library.ShowCustomCursor
+                local mPos = InputService:GetMouseLocation()
+                local X, Y = mPos.X, mPos.Y
+                Cursor.Color = Library.AccentColor
+                Cursor.PointA = Vector2.new(X, Y)
+                Cursor.PointB = Vector2.new(X + 16, Y + 6)
+                Cursor.PointC = Vector2.new(X + 6, Y + 16)
+                Cursor.Visible = Library.ShowCustomCursor
+                CursorOutline.PointA = Cursor.PointA
+                CursorOutline.PointB = Cursor.PointB
+                CursorOutline.PointC = Cursor.PointC
+                CursorOutline.Visible = Library.ShowCustomCursor
 
-                        if not Toggled or (not ScreenGui or not ScreenGui.Parent) then
-                            InputService.MouseIconEnabled = OldMouseIconState
-                            if Cursor then Cursor:Destroy() end
-                            if CursorOutline then CursorOutline:Destroy() end
-                            RunService:UnbindFromRenderStep("LinoriaCursor")
-                        end
-                    end)
-                end))
-            end
+                if not Toggled or (not ScreenGui or not ScreenGui.Parent) then
+                    InputService.MouseIconEnabled = OldMouseIconState
+                    if Cursor then Cursor:Destroy() end
+                    if CursorOutline then CursorOutline:Destroy() end
+                    RunService:UnbindFromRenderStep("LinoriaCursor")
+                end
+            end)
         end
 
         for _, Option in Options do
@@ -8433,6 +9571,22 @@ end
             LockUIButton.Text = Library.CantDragForced and "Unlock UI" or "Lock UI"
         end)
     end
+
+    function Window:AddPlayerList(Idx, Info)
+        Info = Info or {}
+        Info.Standalone = true
+        local HostTab = Window.Tabs[Library.ActiveTab]
+        if not HostTab then
+            for _, Candidate in pairs(Window.Tabs) do
+                HostTab = Candidate
+                break
+            end
+        end
+        assert(HostTab, "AddPlayerList -> create at least one tab first")
+        return HostTab:AddPlayerManager(Idx, Info)
+    end
+
+    Window.CreatePlayerList = Window.AddPlayerList
 
     Window:SetBackgroundImage(WindowInfo.BackgroundImage or "")
     if WindowInfo.AutoShow then task.spawn(Library.Toggle) end
