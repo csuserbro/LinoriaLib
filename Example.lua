@@ -153,8 +153,19 @@ LeftGroupBox:AddToggle("MyToggle", {
 
 	Callback = function(Value, Transparency)
 		print("[cb] Color changed!", Value, "| Transparency changed to:", Transparency)
+	end	
+}):AddSlider("InlineSlider", {
+	Default = 50,
+	Min = 0,
+	Max = 100,
+	Rounding = 0,
+	Suffix = "%",
+	Width = 70,
+	Callback = function(Value)
+		print("[cb] Inline slider changed:", Value)
 	end
 })
+
 
 
 -- Fetching a toggle object for later use:
@@ -368,6 +379,24 @@ LeftGroupBox:AddSlider("MySlider2", {
 
 	Disabled = false, -- Will disable the slider (true / false)
 	Visible = true, -- Will make the slider invisible (true / false)
+})
+
+LeftGroupBox:AddToggle("Test", {
+	Text = "Test",
+	Default = false
+}):AddSlider("TestAmount", {
+	Default = 50,
+	Min = 0,
+	Max = 100,
+	Rounding = 0,
+	Suffix = "%",
+	Width = 65
+}):AddColorPicker("TestColor", {
+	Default = Color3.new(1, 1, 1)
+}):AddDropdown("TestMode", {
+	Values = { "A", "B" },
+	Default = 1,
+	Width = 55
 })
 
 -- Groupbox:AddInput
