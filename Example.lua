@@ -69,6 +69,38 @@ local Tabs = {
 -- except Tabboxes you have to call the functions on a tab (Tabbox:AddTab(name))
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Groupbox")
 
+-- Player settings are keyed by UserId. Offline entries stay hidden, but their saved settings are reused if that UserId joins again.
+-- Relation and the optional relation color are stored per UserId. Your own player logic can read these values from PlayerManager.
+local PlayerManager
+PlayerManager = Window:AddPlayerList("PlayerManager", {
+	Title = "Players",
+	ListTitle = "Players",
+	SettingsTitle = "Selected Player",
+	Width = 500,
+	Height = 360,
+	ListHeight = 230,
+	DockGap = 8,
+	ExcludeLocalPlayer = true,
+	AutoSelect = false,
+	Fields = {
+		{ Type = "Dropdown", Key = "Relation", Text = "Relation", Values = { "Neutral", "Friendly", "Enemy" }, Default = "Neutral" },
+		{ Type = "ToggleColor", Key = "UseRelationColor", ColorKey = "RelationColor", Text = "Override Color", Default = false, ColorDefault = Color3.fromRGB(255, 255, 255) },
+		{ Type = "Input", Key = "Note", Text = "Note", Default = "", Placeholder = "Player note", Finished = true },
+	},
+	Callback = function(Player, UserId, State, Key, Value)
+		if Key == "Relation" then
+			local RelationColor = Value == "Enemy" and Color3.fromRGB(255, 80, 80)
+				or Value == "Friendly" and Color3.fromRGB(80, 255, 120)
+				or Color3.fromRGB(255, 255, 255)
+			PlayerManager:SetValue(Player or UserId, "RelationColor", RelationColor, true)
+			if PlayerManager.SelectedUserId == tostring(UserId) then
+				PlayerManager:RefreshControls()
+			end
+		end
+		print("[PlayerManager]", Player and Player.Name or UserId, Key, Value)
+	end,
+})
+
 -- We can also get our Main tab via the following code:
 -- local LeftGroupBox = Window.Tabs.Main:AddLeftGroupbox("Groupbox")
 
@@ -740,7 +772,6 @@ end);
 
 Library:OnUnload(function()
 	WatermarkConnection:Disconnect()
-
 	print("Unloaded!")
 	Library.Unloaded = true
 end)
@@ -749,6 +780,7 @@ end)
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu")
 
 MenuGroup:AddToggle("KeybindMenuOpen", { Default = Library.KeybindFrame.Visible, Text = "Open Keybind Menu", Callback = function(value) Library.KeybindFrame.Visible = value end})
+MenuGroup:AddToggle("PlayerListOpen", { Default = true, Text = "Open Player List", Callback = function(Value) PlayerManager:SetVisible(Value) end })
 MenuGroup:AddToggle("ShowCustomCursor", {Text = "Custom Cursor", Default = true, Callback = function(Value) Library.ShowCustomCursor = Value end})
 -- Tooltip language defaults to RU for supported Roblox locales, otherwise EN.
 MenuGroup:AddDropdown("TooltipLanguage", { Values = { "EN", "RU" }, Default = Library.TooltipLanguage, Multi = false, Text = "Tooltip Language", Callback = function(Value) Library:SetTooltipLanguage(Value) end })
