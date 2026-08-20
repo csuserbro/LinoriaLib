@@ -3580,6 +3580,329 @@ do
         Options[Idx] = Dropdown
 
         return self
+	end
+
+    function BaseAddonsFuncs:AddSlider(Idx, Info)
+        assert(Info.Default ~= nil, string.format("AddSlider (IDX: %s): Missing default value.", tostring(Idx)))
+        assert(Info.Min ~= nil, string.format("AddSlider (IDX: %s): Missing minimum value.", tostring(Idx)))
+        assert(Info.Max ~= nil, string.format("AddSlider (IDX: %s): Missing maximum value.", tostring(Idx)))
+        assert(Info.Rounding ~= nil, string.format("AddSlider (IDX: %s): Missing rounding value.", tostring(Idx)))
+
+        local ParentObj = self
+        local ToggleLabel = self.TextLabel
+
+        local Slider = {
+            Value = Info.Default;
+            Min = Info.Min;
+            Max = Info.Max;
+            Rounding = Info.Rounding;
+            Type = "Slider";
+            Transient = Info.Transient == true;
+            Visible = if typeof(Info.Visible) == "boolean" then Info.Visible else true;
+            Disabled = if typeof(Info.Disabled) == "boolean" then Info.Disabled else false;
+            Prefix = typeof(Info.Prefix) == "string" and Info.Prefix or "";
+            Suffix = typeof(Info.Suffix) == "string" and Info.Suffix or "";
+            Callback = Info.Callback or function(Value) end;
+            Changed = Info.Changed or function(Value) end;
+        }
+
+        local Tooltip
+        local Dragging = false
+        local DragInput = nil
+
+        local SliderOuter = Library:Create("Frame", {
+            BackgroundColor3 = Color3.new(0, 0, 0);
+            BorderColor3 = Color3.new(0, 0, 0);
+            Size = UDim2.new(0, math.clamp(tonumber(Info.Width) or 72, 45, 140), 0, 15);
+            LayoutOrder = NextAddonLayoutOrder(ParentObj);
+            Visible = Slider.Visible;
+            ZIndex = 6;
+            Parent = ToggleLabel;
+        })
+
+        Library:AddToRegistry(SliderOuter, {
+            BorderColor3 = "Black";
+        })
+
+        local SliderInner = Library:Create("Frame", {
+            BackgroundColor3 = Library.MainColor;
+            BorderColor3 = Library.OutlineColor;
+            BorderMode = Enum.BorderMode.Inset;
+            Size = UDim2.new(1, 0, 1, 0);
+            ZIndex = 7;
+            Parent = SliderOuter;
+        })
+
+        Library:AddToRegistry(SliderInner, {
+            BackgroundColor3 = "MainColor";
+            BorderColor3 = "OutlineColor";
+        })
+
+        local Fill = Library:Create("Frame", {
+            BackgroundColor3 = Library.AccentColor;
+            BorderColor3 = Library.AccentColorDark;
+            Size = UDim2.new(0, 0, 1, 0);
+            ZIndex = 8;
+            Parent = SliderInner;
+        })
+
+        Library:AddToRegistry(Fill, {
+            BackgroundColor3 = "AccentColor";
+            BorderColor3 = "AccentColorDark";
+        })
+
+        local HideBorderRight = Library:Create("Frame", {
+            BackgroundColor3 = Library.AccentColor;
+            BorderSizePixel = 0;
+            Position = UDim2.new(1, 0, 0, 0);
+            Size = UDim2.new(0, 1, 1, 0);
+            ZIndex = 9;
+            Parent = Fill;
+        })
+
+        Library:AddToRegistry(HideBorderRight, {
+            BackgroundColor3 = "AccentColor";
+        })
+
+        local DisplayLabel = Library:CreateLabel({
+            Size = UDim2.new(1, 0, 1, 0);
+            TextSize = 13;
+            Text = "";
+            ZIndex = 10;
+            Parent = SliderInner;
+            RichText = true;
+        })
+
+        Library:OnHighlight(SliderOuter, SliderOuter,
+            { BorderColor3 = "AccentColor" },
+            { BorderColor3 = "Black" },
+            function()
+                return not Slider.Disabled
+            end
+        )
+
+        if IsTooltipValue(Info.Tooltip) or IsTooltipValue(Info.DisabledTooltip) then
+            Tooltip = Library:AddToolTip(Info.Tooltip, Info.DisabledTooltip, SliderOuter)
+            Tooltip.Disabled = Slider.Disabled
+        end
+
+        local function Round(Value)
+            if Slider.Rounding == 0 then
+                return math.floor(Value)
+            end
+
+            return tonumber(string.format("%." .. Slider.Rounding .. "f", Value))
+        end
+
+        function Slider:Display()
+            local CustomDisplayText
+
+            if typeof(Info.FormatDisplayValue) == "function" then
+                CustomDisplayText = Info.FormatDisplayValue(Slider, Slider.Value)
+            end
+
+            if CustomDisplayText ~= nil then
+                DisplayLabel.Text = tostring(CustomDisplayText)
+            else
+                local FormattedValue = (Slider.Value == 0 or Slider.Value == -0) and "0" or tostring(Slider.Value)
+
+                if Info.ShowMax then
+                    DisplayLabel.Text = string.format(
+                        "%s%s%s/%s%s%s",
+                        Slider.Prefix,
+                        FormattedValue,
+                        Slider.Suffix,
+                        Slider.Prefix,
+                        tostring(Slider.Max),
+                        Slider.Suffix
+                    )
+                else
+                    DisplayLabel.Text = string.format(
+                        "%s%s%s",
+                        Slider.Prefix,
+                        FormattedValue,
+                        Slider.Suffix
+                    )
+                end
+            end
+
+            local X = Library:MapValue(Slider.Value, Slider.Min, Slider.Max, 0, 1)
+            Fill.Size = UDim2.new(math.clamp(X, 0, 1), 0, 1, 0)
+            HideBorderRight.Visible = X > 0 and X < 1
+        end
+
+        function Slider:UpdateColors()
+            DisplayLabel.TextColor3 = Slider.Disabled and Library.DisabledAccentColor or Color3.new(1, 1, 1)
+
+            Fill.BackgroundColor3 = Slider.Disabled and Library.DisabledAccentColor or Library.AccentColor
+            Fill.BorderColor3 = Slider.Disabled and Library.DisabledOutlineColor or Library.AccentColorDark
+            HideBorderRight.BackgroundColor3 = Slider.Disabled and Library.DisabledAccentColor or Library.AccentColor
+
+            Library.RegistryMap[Fill].Properties.BackgroundColor3 = Slider.Disabled and "DisabledAccentColor" or "AccentColor"
+            Library.RegistryMap[Fill].Properties.BorderColor3 = Slider.Disabled and "DisabledOutlineColor" or "AccentColorDark"
+            Library.RegistryMap[HideBorderRight].Properties.BackgroundColor3 = Slider.Disabled and "DisabledAccentColor" or "AccentColor"
+        end
+
+        function Slider:OnChanged(Func)
+            Slider.Changed = Func
+        end
+
+        function Slider:SetValue(Value)
+            if Slider.Disabled then
+                return
+            end
+
+            Value = tonumber(Value)
+
+            if not Value then
+                return
+            end
+
+            Value = Round(math.clamp(Value, Slider.Min, Slider.Max))
+
+            if Slider.Value == Value then
+                return
+            end
+
+            Slider.Value = Value
+            Slider:Display()
+
+            Library:SafeCallback(Slider.Callback, Slider.Value)
+            Library:SafeCallback(Slider.Changed, Slider.Value)
+        end
+
+        function Slider:SetMin(Value)
+            assert(Value < Slider.Max, "Min value cannot be greater than the current max value.")
+
+            Slider.Min = Value
+            Slider.Value = math.clamp(Slider.Value, Slider.Min, Slider.Max)
+            Slider:Display()
+        end
+
+        function Slider:SetMax(Value)
+            assert(Value > Slider.Min, "Max value cannot be less than the current min value.")
+
+            Slider.Max = Value
+            Slider.Value = math.clamp(Slider.Value, Slider.Min, Slider.Max)
+            Slider:Display()
+        end
+
+        function Slider:SetPrefix(Value)
+            if typeof(Value) == "string" then
+                Slider.Prefix = Value
+                Slider:Display()
+            end
+        end
+
+        function Slider:SetSuffix(Value)
+            if typeof(Value) == "string" then
+                Slider.Suffix = Value
+                Slider:Display()
+            end
+        end
+
+        function Slider:SetVisible(Value)
+            Slider.Visible = Value
+            SliderOuter.Visible = Value
+        end
+
+        function Slider:SetDisabled(Value)
+            Slider.Disabled = Value
+
+            if Tooltip then
+                Tooltip.Disabled = Value
+            end
+
+            Slider:UpdateColors()
+        end
+
+        local function SetFromX(X)
+            local MinX = SliderInner.AbsolutePosition.X
+            local Width = math.max(SliderInner.AbsoluteSize.X, 1)
+            local Scale = math.clamp((X - MinX) / Width, 0, 1)
+            local Value = Round(Library:MapValue(Scale, 0, 1, Slider.Min, Slider.Max))
+
+            if Value == Slider.Value then
+                return
+            end
+
+            Slider.Value = Value
+            Slider:Display()
+
+            Library:SafeCallback(Slider.Callback, Slider.Value)
+            Library:SafeCallback(Slider.Changed, Slider.Value)
+        end
+
+        SliderOuter.InputBegan:Connect(function(Input)
+            if Slider.Disabled then
+                return
+            end
+
+            if Library:MouseIsOverOpenedFrame() then
+                return
+            end
+
+            if Input.UserInputType == Enum.UserInputType.MouseButton1
+                or Input.UserInputType == Enum.UserInputType.Touch then
+
+                Dragging = true
+                DragInput = Input
+
+                SetFromX(Input.UserInputType == Enum.UserInputType.Touch and Input.Position.X or Mouse.X)
+
+                if Library.IsMobile then
+                    Library.CanDrag = false
+                end
+            end
+        end)
+
+        Library:GiveSignal(InputService.InputChanged:Connect(function(Input)
+            if not Dragging then
+                return
+            end
+
+            if Input.UserInputType == Enum.UserInputType.MouseMovement then
+                SetFromX(Mouse.X)
+            elseif DragInput
+                and DragInput.UserInputType == Enum.UserInputType.Touch
+                and Input == DragInput then
+
+                SetFromX(Input.Position.X)
+            end
+        end))
+
+        Library:GiveSignal(InputService.InputEnded:Connect(function(Input)
+            if not Dragging then
+                return
+            end
+
+            if Input.UserInputType == Enum.UserInputType.MouseButton1
+                or Input.UserInputType == Enum.UserInputType.Touch then
+
+                Dragging = false
+                DragInput = nil
+
+                if Library.IsMobile then
+                    Library.CanDrag = true
+                end
+
+                Library:AttemptSave()
+            end
+        end))
+
+        Slider:Display()
+        task.delay(0.1, Slider.UpdateColors, Slider)
+
+        Slider.DisplayFrame = SliderOuter
+        Slider.Default = Slider.Value
+
+        if ParentObj.Addons then
+            table.insert(ParentObj.Addons, Slider)
+        end
+
+        Options[Idx] = Slider
+
+        return self
     end
 
     BaseAddons.__index = BaseAddonsFuncs
